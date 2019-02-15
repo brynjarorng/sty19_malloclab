@@ -28,10 +28,10 @@
  *       Format!
  *
  * === User information ===
- * Group: Nuclear Ghandi
- * User 1: Brynjar Örn Grétarsson
- * SSN: X 
- * User 2: Daði Steinn Brynjarsson
+ * Group: 
+ * User 1: 
+ * SSN: X
+ * User 2: 
  * SSN: X
  * User 3: 
  * SSN: X
@@ -39,15 +39,15 @@
  ********************************************************/
 team_t team = {
     /* Group name */
-    "AA_AmnesiacAnonymous",
+    "Nuclear Ghandi",
     /* First member's full name */
-    "Student Studentsson",
+    "Brynjar Örn Grétarsson",
     /* First member's email address */
-    "student16@ru.is",
+    "brynjarog17@ru.is",
     /* Second member's full name (leave blank if none) */
-    "",
+    "Daði Steinn Brynjarsson",
     /* Second member's email address (leave blank if none) */
-    "",
+    "dadib17@ru.is",
     /* Third full name (leave blank if none) */
     "",
     /* Third member's email address (leave blank if none) */
