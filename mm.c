@@ -28,10 +28,10 @@
  *       Format!
  *
  * === User information ===
- * Group: 
- * User 1: 
- * SSN: X
- * User 2: 
+ * Group: Nuclear Ghandi
+ * User 1: Brynjar Örn Grétarsson
+ * SSN: X 
+ * User 2: Daði Steinn Brynjarsson
  * SSN: X
  * User 3: 
  * SSN: X
