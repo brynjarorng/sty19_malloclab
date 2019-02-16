@@ -56,12 +56,37 @@ team_t team = {
 
 /* single word (4) or double word (8) alignment */
 #define ALIGNMENT 8
+#define WSIZE 4
 
 /* rounds up to the nearest multiple of ALIGNMENT */
 #define ALIGN(size) (((size) + (ALIGNMENT-1)) & ~0x7)
 
 
 #define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
+
+// all macros from the book
+// pack size and allocated bit into one word
+#define PACK(size, alloc) ((size) | (alloc))
+
+// read and write one word
+#define GET(p) (*(unsigned int *)(p))
+#define PUT(p, val) (*(unsigned int *) = (val))
+
+// read the size and alloc fields from addr. p
+#define GET_SIZE(p) (GET(p) & ~0x7)
+#define GET_ALLOC(p) (GET(p) & 0x1)
+#define GET_NEXT_PTR(p) (GET(p + 0x8) & 0x8)
+
+// compute footer and header of current block
+#define HDRP(bp) ((char *)(bp) - WSIZE)
+#define FTRP(bp) ((char *)(bp) + GET_SIZE(HDRP(bp)) - ALIGNMENT)
+
+// compute addr of next and prev block
+#define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(((char *)(bp) - WSIZE)))
+#define PREV_BLKP(bp) ((char *)(bp) - GET_SIZE(((char *)(bp) - ALIGNMENT)))
+
+// Pointer to first free block in the free list
+char *freeBlock;
 
 /* 
  * mm_init - initialize the malloc package.
@@ -116,3 +141,30 @@ void *mm_realloc(void *ptr, size_t size)
     mm_free(oldptr);
     return newptr;
 }
+
+int mm_check(void *ptr)
+{
+    int numFree1 = 0;
+    int numFree2 = 0;
+    char *bp;
+
+    // loop through all blocks in order, check for cycles, count free blocks
+    // coalesc check, all valid addresses
+    for(bp = ptr; GET_SIZE(bp) > 0; bp = NEXT_BLKP(bp)) {
+        if(GET_ALLOC(bp) == 'f') {
+            numFree1++;
+        }
+
+    }
+
+    // check number of free blocks
+    for(bp = freeBlock; GET_SIZE(bp) > 0 && bp != NULL; GET_NEXT_PTR(bp)) {
+        if(GET_ALLOC(bp) != 'f') {
+            printf("Block marked as assigned but was in free list!");
+        }
+        numFree2++;
+    }
+
+}
+
+// Next pointer vs calculate next block start, speed vs space
