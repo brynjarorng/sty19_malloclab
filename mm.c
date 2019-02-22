@@ -124,7 +124,7 @@ int mm_init(void)
     size_t prologue_block_size = 16;
 
     PUT(heap_listp, PACK(prologue_block_size, 1));             // Prologue HDR size and alloc bit
-    PUT(heap_listp+WSIZE, 0);                                  // Prologue next pointer
+    PUT(heap_listp+WSIZE, heap_listp+2*DSIZE);                                  // Prologue next pointer
     PUT(heap_listp+DSIZE, 0);                                  // prev pointer, always null on the head node
     PUT(heap_listp+DSIZE+WSIZE, PACK(prologue_block_size, 1)); // prologue footer
 
@@ -135,13 +135,13 @@ int mm_init(void)
 
     PUT(heap_listp+2*DSIZE, PACK(0,1));                     // Epilogue HDR size and alloc bit
     PUT(heap_listp+2*DSIZE+WSIZE, 0);                       // Epilogue next ptr, always null
-    PUT(heap_listp+3*DSIZE, 0);                             // Epilogue prev ptr
+    PUT(heap_listp+3*DSIZE, heap_listp);                             // Epilogue prev ptr
 
 
     heap_listp += 2*DSIZE;
 
     /* Extend the empty heap with a free block of CHUNKSIZE bytes */
-    if (extend_heap(CHUNKSIZE/WSIZE) == NULL) {
+    if (extend_heap(40/WSIZE) == NULL) {
         return -1;
     }
     return 0;
@@ -154,7 +154,7 @@ int mm_init(void)
 /* $begin mmmalloc */
 void *mm_malloc(size_t size) 
 {  
-    mm_checkheap(0);
+    //mm_checkheap(0);
     size_t asize;      /* adjusted block size */
     size_t extendsize; /* amount to extend heap if no fit */
     char *bp;      
@@ -180,7 +180,7 @@ void *mm_malloc(size_t size)
 
     /* No fit found. Get more memory and place the block */
     extendsize = MAX(asize,CHUNKSIZE);
-    if ((bp = extend_heap(extendsize/WSIZE)) == NULL) {
+    if ((bp = extend_heap(40/WSIZE)) == NULL) {
         return NULL;
     }
     place(bp, asize);
