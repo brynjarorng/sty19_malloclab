@@ -68,7 +68,7 @@ static void checkblock(void *bp);
 #define ALIGNMENT 8
 #define WSIZE 4
 #define DSIZE 8
-#define OVERHEAD 8
+#define OVERHEAD 16
 #define CHUNKSIZE (1<<12)
 #define HDRSIZE 16
 
@@ -101,8 +101,9 @@ static void checkblock(void *bp);
 #define FTRP(bp) ((char *)(bp) + GET_SIZE(HDRP(bp)) - ALIGNMENT)
 
 // compute addr of next and prev block
-#define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(((char *)(bp) - WSIZE)))
-#define PREV_BLKP(bp) ((char *)(bp) - GET_SIZE(((char *)(bp) - ALIGNMENT)))
+//#define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(((char *)(bp) - WSIZE)))
+#define NEXT_BLKP(bp) *((size_t *)(bp) + WSIZE)
+#define PREV_BLKP(bp) *(size_t *)(bp + DSIZE)
 
 // Pointer to first block on heap
 static char *heap_listp;
@@ -139,7 +140,7 @@ int mm_init(void)
     heap_listp += 2*DSIZE;
 
     /* Extend the empty heap with a free block of CHUNKSIZE bytes */
-    if (extend_heap(40/WSIZE) == NULL) {
+    if (extend_heap(100/WSIZE) == NULL) {
         return -1;
     }
     return 0;
@@ -164,7 +165,8 @@ void *mm_malloc(size_t size)
 
     /* Adjust block size to include overhead and alignment reqs. */
     if (size <= DSIZE) {
-        asize = DSIZE + OVERHEAD;
+        // min payload space, head - nxt - prv - tail, padding
+        asize = DSIZE + OVERHEAD + WSIZE;
     }
     else {
         asize = DSIZE * ((size + (OVERHEAD) + (DSIZE-1)) / DSIZE);
@@ -242,7 +244,7 @@ static void *extend_heap(size_t words)
     // init new block
     PUT(bp, PACK(size, 0));                            // put header
     PUT(bp + WSIZE, heap_listp);                       // next pointer
-    PUT(bp + DSIZE, *(int*)(heap_listp + DSIZE));      // prev pointer
+    PUT(bp + DSIZE, PREV_BLKP(heap_listp));            // prev pointer
     PUT(bp + size - WSIZE, PACK(size, 0));             // put footer
 
     // fix list to point to new block
@@ -251,7 +253,8 @@ static void *extend_heap(size_t words)
 
 
     /* Coalesce if the previous block was free */
-    return coalesce(bp);
+    //return coalesce(bp);
+    return bp;
 }
 /* $end mmextendheap */
 
@@ -264,14 +267,41 @@ static void *extend_heap(size_t words)
 static void place(void *bp, size_t asize)
 /* $end mmplace-proto */
 {
-    size_t csize = GET_SIZE(HDRP(bp));   
+    size_t csize = GET_SIZE(bp);
+    int newSize = csize - asize;
 
-    if ((csize - asize) >= (DSIZE + OVERHEAD)) { 
-        PUT(HDRP(bp), PACK(asize, 1));
-        PUT(FTRP(bp), PACK(asize, 1));
-        bp = NEXT_BLKP(bp);
-        PUT(HDRP(bp), PACK(csize-asize, 0));
-        PUT(FTRP(bp), PACK(csize-asize, 0));
+    // if block is larger than the requested block
+    if (newSize >= (DSIZE + OVERHEAD)) { 
+        size_t *newBlock = bp + asize;
+
+        // split block and update pointers
+        // change pointers pointing to the old block to point to the new block
+        // prev->next = new
+        PUT(PREV_BLKP(bp) + WSIZE, newBlock);
+
+        // next->prev = new
+        PUT(PREV_BLKP(bp) + DSIZE, newBlock);
+
+        // shrink the empty block
+        // create header
+        PUT(newBlock, PACK(newSize, 0));
+
+        // create footer
+        PUT(newBlock + newSize - WSIZE, PACK(newSize, 0));
+
+        // new->prev = bp->prev
+        PUT(newBlock + DSIZE, PREV_BLKP(bp) + DSIZE);
+
+        // new->next = bp->next
+        PUT(newBlock + WSIZE, NEXT_BLKP(bp) + DSIZE);
+
+
+        // fix allocated block
+        // header
+        PUT(bp, PACK(asize, 1));
+
+        // footer
+        PUT(bp + asize - WSIZE, PACK(asize, 1));
     }
     else { 
         PUT(HDRP(bp), PACK(csize, 1));
@@ -288,8 +318,8 @@ static void *find_fit(size_t asize)
     /* first fit search */
     void *bp;
 
-    for (bp = heap_listp; GET_SIZE(HDRP(bp)) > 0; bp = NEXT_BLKP(bp)) {
-        if (!GET_ALLOC(HDRP(bp)) && (asize <= GET_SIZE(HDRP(bp)))) {
+    for (bp = *(size_t*)(heap_listp - 3*WSIZE); GET_SIZE(bp) > 0; bp = *(size_t *)(bp + WSIZE)) {
+        if ((GET_ALLOC(bp) == 0) && (asize <= GET_SIZE(bp))) {
             return bp;
         }
     }
