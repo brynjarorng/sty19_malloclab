@@ -121,21 +121,19 @@ int mm_init(void)
     //                   Header                 |    Footer
     //      4        +     4      +     4       +      4        = 16 bytes
     // size + alloc  -  next ptr  -  prev ptr   | size + alloc
+    // prologue and epilogue have the same structure
     size_t prologue_block_size = 16;
 
     PUT(heap_listp, PACK(prologue_block_size, 1));             // Prologue HDR size and alloc bit
-    PUT(heap_listp+WSIZE, heap_listp+2*DSIZE);                                  // Prologue next pointer
+    PUT(heap_listp+WSIZE, heap_listp+2*DSIZE);                 // Prologue next pointer
     PUT(heap_listp+DSIZE, 0);                                  // prev pointer, always null on the head node
     PUT(heap_listp+DSIZE+WSIZE, PACK(prologue_block_size, 1)); // prologue footer
 
-    //                   Header              
-    //      4        +     4      +     4         = 12 bytes
-    // size + alloc  -  next ptr  -  prev ptr
-    // prologue block "will be" 0 bytes in order to know where the list stops 
-
-    PUT(heap_listp+2*DSIZE, PACK(0,1));                     // Epilogue HDR size and alloc bit
+    // epilogue
+    PUT(heap_listp+2*DSIZE, PACK(0, 1));                    // Epilogue HDR size and alloc bit
     PUT(heap_listp+2*DSIZE+WSIZE, 0);                       // Epilogue next ptr, always null
-    PUT(heap_listp+3*DSIZE, heap_listp);                             // Epilogue prev ptr
+    PUT(heap_listp+3*DSIZE, heap_listp);                    // Epilogue prev ptr
+    PUT(heap_listp+7*WSIZE, PACK(0, 1));                    // Epilogue footer, size and alloc bit
 
 
     heap_listp += 2*DSIZE;
@@ -241,10 +239,16 @@ static void *extend_heap(size_t words)
         return NULL;
     }
 
-    /* Initialize free block header/footer and the epilogue header */
-    PUT(HDRP(bp), PACK(size, 0));         /* free block header */
-    PUT(FTRP(bp), PACK(size, 0));         /* free block footer */
-    PUT(HDRP(NEXT_BLKP(bp)), PACK(0, 1)); /* new epilogue header */
+    // init new block
+    PUT(bp, PACK(size, 0));                            // put header
+    PUT(bp + WSIZE, heap_listp);                       // next pointer
+    PUT(bp + DSIZE, *(int*)(heap_listp + DSIZE));      // prev pointer
+    PUT(bp + size - WSIZE, PACK(size, 0));             // put footer
+
+    // fix list to point to new block
+    PUT((*(size_t*)(heap_listp + DSIZE) + WSIZE), bp);     //ep->prev->next = bp
+    PUT((heap_listp + DSIZE), bp);                         //ep->prev = bp
+
 
     /* Coalesce if the previous block was free */
     return coalesce(bp);
