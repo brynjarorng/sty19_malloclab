@@ -70,11 +70,12 @@ static void checkblock(void *bp);
 #define DSIZE 8
 #define OVERHEAD 16
 #define CHUNKSIZE (1<<12)
+//#define CHUNKSIZE 32
 // min payload space (8) + head + nxt + prv + tail = 32
 #define MINCHUNKSIZE 32
 
 /* rounds up to the nearest multiple of ALIGNMENT */
-#define ALIGN(size) (((size) + (ALIGNMENT-1)) & ~0x7)
+#define ALIGN(size) (((size_t)(size) + (ALIGNMENT-1)) & ~0x7)
 
 #define MAX(x, y) ((x) > (y)? (x) : (y))
 
@@ -128,6 +129,7 @@ int mm_init(void)
     // create a 4 byte padding in order to make the payloads align to 8 bits
     PUT(epilogue_pointer, 0);
     epilogue_pointer += 4;
+    prologue_pointer = epilogue_pointer;
 
     //                   Header                 |    Footer
     //      4        +     4      +     4       +      4        = 16 bytes
@@ -149,7 +151,7 @@ int mm_init(void)
     epilogue_pointer += 2*DSIZE;
 
     /* Extend the empty heap with a free block of CHUNKSIZE bytes */
-    if (extend_heap(48/WSIZE) == NULL) {
+    if (extend_heap(CHUNKSIZE/WSIZE) == NULL) {
         return -1;
     }
     return 0;
@@ -178,8 +180,7 @@ void *mm_malloc(size_t size)
         asize = MINCHUNKSIZE;
     }
     else {
-        asize = ALIGN(asize);
-        asize = size + DSIZE*2;
+        asize = ALIGN(size + DSIZE*2);
     }
     
     /* Search the free list for a fit */
@@ -190,10 +191,11 @@ void *mm_malloc(size_t size)
 
     /* No fit found. Get more memory and place the block */
     
-    extendsize = MAX(asize,CHUNKSIZE);
-    if ((bp = extend_heap(32/WSIZE)) == NULL) {
+    extendsize = ALIGN(MAX(asize,CHUNKSIZE));
+    if ((bp = extend_heap(extendsize/WSIZE)) == NULL) {
         return NULL;
     }
+    //printf("alloc: %p\n", bp);
     place(bp, asize);
     
     return bp + 12;
@@ -237,6 +239,42 @@ void mm_free(void *bp)
  */
 void *mm_realloc(void *ptr, size_t size)
 {
+    // if ptr is null return new memory
+    if (ptr == NULL) {
+        return mm_malloc(size);
+    }
+
+    // if size == 0 free the block and return NULL
+    if (size == 0) {
+        mm_free(ptr);
+        return NULL;
+    }
+
+    // return same pointer if large enough
+    size_t old_alloc_size = GET_SIZE(ptr);
+    if (old_alloc_size >= size - 2*DSIZE) {
+        return ptr;
+    }
+
+    /*
+    // else get a new block, copy old content, free the block then return new pointer
+    void *new_block;
+    size_t copySize = old_alloc_size;
+
+    if ((new_block = mm_malloc(size)) == NULL) {
+        printf("ERROR: mm_malloc failed in mm_realloc\n");
+        exit(1);
+    }
+
+    if (size < copySize) {
+        copySize = size;
+    }
+    memcpy(ptr, new_block, copySize);
+    free(ptr);
+
+    return new_block;
+    */
+
     void *newp;
     size_t copySize;
 
@@ -286,6 +324,7 @@ static void *extend_heap(size_t words)
 
 
     /* Coalesce if the previous block was free */
+    //printf("b4c: %p\n", bp);
     return coalesce(bp);
 }
 
@@ -296,56 +335,59 @@ static void *extend_heap(size_t words)
  */
 /* $begin mmplace */
 /* $begin mmplace-proto */
-static void place(char *bp, size_t asize)
+static void place(char *bp, size_t requested_size)
 /* $end mmplace-proto */
 {
-    size_t csize = GET_SIZE(bp);
-    size_t newSize = csize - asize;
+    size_t block_size = GET_SIZE(bp);
+    size_t free_size = block_size - requested_size;
 
     // if block is larger than the requested block
     // either this or leave the rest to have a chance of being coalesced
-    if (newSize >= 15) {
-        char *newBlock = bp + asize;
+    if (free_size >= 15) {
+        char *free_block = bp + requested_size;
 
         // split block and update pointers
         // change pointers pointing to the old block to point to the new block
         // prev->next = new
-        PUT((*(size_t *)(bp + DSIZE)) + WSIZE, newBlock);
+        PUT((*(size_t *)(bp + DSIZE)) + WSIZE, free_block);
 
         // next->prev = new
-        PUT((*(size_t *)(bp + WSIZE)) + DSIZE, newBlock);
+        PUT((*(size_t *)(bp + WSIZE)) + DSIZE, free_block);
 
         // shrink the empty block
         // create header
-        PUT(newBlock, PACK(newSize, 0));
+        PUT(free_block, PACK(free_size, 0));
 
         // create footer
-        PUT(newBlock + newSize - WSIZE, PACK(newSize, 0));
+        PUT(free_block + free_size - WSIZE, PACK(free_size, 0));
 
         // new->prev = bp->prev
-        PUT(newBlock + DSIZE, *(size_t *)(bp + DSIZE));
+        PUT(free_block + DSIZE, *(size_t *)(bp + DSIZE));
 
         // new->next = bp->next
-        PUT(newBlock + WSIZE, *(size_t *)(bp + WSIZE));
+        PUT(free_block + WSIZE, *(size_t *)(bp + WSIZE));
 
         // fix allocated block
         // header
-        PUT(bp, PACK(asize, 1));
+        PUT(bp, PACK(requested_size, 1));
 
         // footer
-        PUT(bp + asize - WSIZE, PACK(asize, 1));
+        PUT(bp + requested_size - WSIZE, PACK(requested_size, 1));
     }
     else {
         // remove the block from the free list
         // prev->next = next
-        PUT((*(size_t *)(bp + DSIZE)) + WSIZE, *(size_t *)(bp + WSIZE));
+        //printf("%p\n", bp);
+        PUT(PREV_BLKP(bp) + WSIZE, NEXT_BLKP(bp));
 
-        //next-prev = prev
-        PUT((*(size_t *)(bp + WSIZE)) + DSIZE, *(size_t *)(bp + DSIZE));
+        // next->prev = prev
+        PUT(NEXT_BLKP(bp) + DSIZE, PREV_BLKP(bp));
 
-        // update header and footer to be allocated
-        PUT(bp, PACK(csize, 1));
-        PUT(bp + csize - WSIZE, PACK(csize, 1));
+        // update header
+        PUT(bp, PACK(block_size, 1));
+
+        // update footer
+        PUT(bp + block_size - WSIZE, PACK(block_size, 1));
     }
 }
 /* $end mmplace */
@@ -355,18 +397,17 @@ static void place(char *bp, size_t asize)
  */
 static size_t *find_fit(size_t asize)
 {
-
-    void *bp = *(size_t *)(epilogue_pointer + DSIZE);
+    void *bp = *(size_t *)(prologue_pointer + WSIZE);
 
     while (GET_SIZE(bp) != 0) {
-        // check if block is sufficently large and not allocated
-        int tmpSize = GET_SIZE(bp);
+        // check if block is sufficently large
         if(GET_SIZE(bp) >= (int)asize) {
+            //printf("%p, %p\n", prologue_pointer, bp); 
             return bp;
         }
 
-        // get prev block and check that
-        bp = *(size_t *)(bp + DSIZE);
+        // get next block and check that
+        bp = *(size_t *)(bp + WSIZE);
     }
 
     return NULL; // no fit
@@ -386,11 +427,18 @@ static void *coalesce(void *bp)
     if (prev_alloc && next_alloc) {            // Case 1 - Nothing
         return bp;
     }
-    if (!prev_alloc && next_alloc) {      // Case 2 - Free above
+    else if (!prev_alloc && next_alloc) {      // Case 2 - Free above
+        size_t tmp_size = GET_SIZE(bp - WSIZE);
         coalesce_above(bp);
+        bp -= tmp_size;
     }
-    if (prev_alloc && !next_alloc) {      // Case 3 - Free below
+    else if (prev_alloc && !next_alloc) {      // Case 3 - Free below
         coalesce_above(bp + size);
+    } else {
+        size_t tmp_size = GET_SIZE(bp - WSIZE);
+        coalesce_above(bp + size);
+        coalesce_above(bp);
+        bp -= tmp_size;
     }
     
     return bp;
