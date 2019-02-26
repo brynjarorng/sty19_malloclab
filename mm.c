@@ -69,8 +69,7 @@ static void checkblock(void *bp);
 #define WSIZE 4
 #define DSIZE 8
 #define OVERHEAD 16
-#define CHUNKSIZE (1<<12)
-//#define CHUNKSIZE 32
+#define CHUNKSIZE (1<<7)
 // min payload space (8) + head + nxt + prv + tail = 32
 #define MINCHUNKSIZE 32
 
@@ -252,41 +251,23 @@ void *mm_realloc(void *ptr, size_t size)
 
     // return same pointer if large enough
     size_t old_alloc_size = GET_SIZE(ptr);
-    if (old_alloc_size >= size - 2*DSIZE) {
+    if (old_alloc_size >= size + 2*DSIZE) {
         return ptr;
     }
 
-    /*
+    
     // else get a new block, copy old content, free the block then return new pointer
-    void *new_block;
-    size_t copySize = old_alloc_size;
-
-    if ((new_block = mm_malloc(size)) == NULL) {
-        printf("ERROR: mm_malloc failed in mm_realloc\n");
-        exit(1);
-    }
-
-    if (size < copySize) {
-        copySize = size;
-    }
-    memcpy(ptr, new_block, copySize);
-    free(ptr);
-
-    return new_block;
-    */
-
     void *newp;
-    size_t copySize;
 
     if ((newp = mm_malloc(size)) == NULL) {
         printf("ERROR: mm_malloc failed in mm_realloc\n");
         exit(1);
     }
-    copySize = GET_SIZE(ptr);
-    if (size < copySize) {
-        copySize = size;
+    old_alloc_size -= 2*DSIZE;
+    if (size < old_alloc_size) {
+        old_alloc_size = size;
     }
-    memcpy(newp, ptr, copySize);
+    memcpy(newp, ptr, old_alloc_size);
     mm_free(ptr);
     return newp;
 }
@@ -321,10 +302,7 @@ static void *extend_heap(size_t words)
     PUT(epilogue_pointer + WSIZE, 0);                   // next pointer
     PUT(epilogue_pointer + DSIZE, bp);                  // prev pointer
 
-
-
     /* Coalesce if the previous block was free */
-    //printf("b4c: %p\n", bp);
     return coalesce(bp);
 }
 
@@ -377,7 +355,6 @@ static void place(char *bp, size_t requested_size)
     else {
         // remove the block from the free list
         // prev->next = next
-        //printf("%p\n", bp);
         PUT(PREV_BLKP(bp) + WSIZE, NEXT_BLKP(bp));
 
         // next->prev = prev
