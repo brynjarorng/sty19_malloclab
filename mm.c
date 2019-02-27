@@ -166,14 +166,8 @@ void *mm_malloc(size_t pl_size)
         return NULL;
     }
 
-    
     // Adjust block size to include overhead and alignment reqs.
-    if (pl_size < OVERHEAD) {
-        block_size = MINBLOCKSIZE;
-    }
-    else {
-        block_size = ALIGN(pl_size + OVERHEAD);
-    }
+    block_size = MAX(ALIGN(pl_size + OVERHEAD), MINBLOCKSIZE);
     
     /* Search the free list for a fit */
     if ((bp = find_fit(block_size)) != NULL) {
@@ -241,12 +235,13 @@ void *mm_realloc(void *ptr, size_t size)
         return NULL;
     }
 
+    ptr -= 12;
     // return same pointer if large enough
     size_t old_alloc_size = GET_SIZE(ptr - HDRSIZE);
     if (old_alloc_size >= size + OVERHEAD) {
-        return ptr;
+        return ptr + 12;
     }
-
+    
     // check if block behind is free and large enough for the realloc
     if (!GET_ALLOC(ptr - HDRSIZE + old_alloc_size)) {
         size_t block_behind_size = GET_SIZE(ptr - HDRSIZE + old_alloc_size);
@@ -265,7 +260,7 @@ void *mm_realloc(void *ptr, size_t size)
             // next->prev = prev
             PUT(NEXT_BLKP(free_block) + DSIZE, PREV_BLKP(free_block));
 
-            return ptr;
+            return ptr + 12;
         }
     }
 
@@ -281,8 +276,8 @@ void *mm_realloc(void *ptr, size_t size)
     if (size < old_alloc_size) {
         old_alloc_size = size;
     }
-    memcpy(newp, ptr, old_alloc_size);
-    mm_free(ptr);
+    memcpy(newp, ptr + 12, old_alloc_size);
+    mm_free(ptr + 12);
     return newp;
 }
 
