@@ -104,7 +104,7 @@ static void checkblock(void *bp);
 #define NEXT_BLKP(bp)   *((size_t *)(bp + WSIZE))     //next pointer on free list
 #define ABOVE_BLKP(bp)  ((char *)bp - GET_SIZE(bp))  //prev block on heap
 #define BELOW_BLKP(bp)  ((char *)bp + GET_SIZE(bp))  //next block on heap
-#define FTR(bp)         (BELOW_BLKP(bp) - WSIZE)
+#define FTRP(bp)         (BELOW_BLKP(bp) - WSIZE)
 
 // Pointers to prologue and epilogue
 static char *prologue_pointer;
@@ -199,7 +199,7 @@ void mm_free(void *bp)
 
     // fix header and footer
     PUT(bp, PACK(block_size, 0));
-    PUT(FTR(bp), PACK(block_size, 0));
+    PUT(FTRP(bp), PACK(block_size, 0));
 
     // add block to free list
     // freeblock->next = epilogoue
@@ -218,6 +218,16 @@ void mm_free(void *bp)
 }
 
 /* $end mmfree */
+
+void mm_insert(void *bp)
+{
+
+}
+
+void mm_remove(void *bp)
+{
+
+}
 
 /*
  * mm_realloc - naive implementation of mm_realloc
@@ -252,7 +262,7 @@ void *mm_realloc(void *ptr, size_t size)
             // change header
             PUT(ptr, PACK(expanded_block_size, 1));
             // change footer
-            PUT(FTR(ptr), PACK(expanded_block_size, 1));
+            PUT(FTRP(ptr), PACK(expanded_block_size, 1));
 
             // remove block from list
             // prev->next = next
@@ -301,7 +311,7 @@ static void *extend_heap(size_t size)
     PUT(bp, PACK(size, 0));                            // put header
     PUT(bp + WSIZE, epilogue_pointer);                 // next pointer
     // prev pointer does not need to be changed, it still points to a valid block
-    PUT(epilogue_pointer - WSIZE, PACK(size, 0));      // put footer
+    PUT(FTRP(bp), PACK(size, 0));                      // put footer
 
     // write new epilogue block
     PUT(epilogue_pointer, PACK(0, 1));                  // put header
@@ -342,13 +352,13 @@ static void place(char *bp, size_t requested_size)
         // create header
         PUT(bp, PACK(remaining_size, 0));
         // create footer
-        PUT(FTR(bp), PACK(remaining_size, 0));
+        PUT(FTRP(bp), PACK(remaining_size, 0));
         
         // Fix allocated block
         // header
         PUT(alloced_block, PACK(requested_size, 1));
         // Footer
-        PUT(FTR(alloced_block), PACK(requested_size, 1));
+        PUT(FTRP(alloced_block), PACK(requested_size, 1));
         */
         // Allocate in the front of block
         char *free_block = bp + requested_size;
@@ -356,13 +366,13 @@ static void place(char *bp, size_t requested_size)
         // header
         PUT(bp, PACK(requested_size, 1));
         // Footer
-        PUT(FTR(bp), PACK(requested_size, 1));
+        PUT(FTRP(bp), PACK(requested_size, 1));
 
         // Shrink the empty block
         // create header
         PUT(free_block, PACK(remaining_size, 0));
         // create footer
-        PUT(FTR(free_block), PACK(remaining_size, 0));
+        PUT(FTRP(free_block), PACK(remaining_size, 0));
 
         /* Put free block in back of list
         // Fix free block pointers
@@ -404,7 +414,7 @@ static void place(char *bp, size_t requested_size)
         // update header
         PUT(bp, PACK(block_size, 1));
         // update footer
-        PUT(FTR(bp), PACK(block_size, 1));
+        PUT(FTRP(bp), PACK(block_size, 1));
     }
 }
 /* $end mmplace */
@@ -437,8 +447,6 @@ static void *coalesce(void *bp)
     size_t prev_alloc = GET_ALLOC(bp - WSIZE);
     size_t size = GET_SIZE(bp);
     size_t next_alloc = GET_ALLOC(bp + size);
-    //printf("pa: %p, p: %d, n: %d\n", bp, prev_alloc, next_alloc);
-    //fflush(stdout);
 
     if (prev_alloc && next_alloc) {            // Case 1 - Nothing
         return bp;
@@ -468,7 +476,7 @@ void coalesce_above(void *bp)
 
     // fix header and footer
     PUT(bp - above_size, PACK(size + above_size, 0));
-    PUT(FTR(bp), PACK(size + above_size, 0));
+    PUT(FTRP(bp), PACK(size + above_size, 0));
 
     // remove below block from free list
     // prev->next = below_next
@@ -532,7 +540,9 @@ static void printblock(void *bp)
 
     hsize = GET_SIZE(bp);
     halloc = GET_ALLOC(bp);  
-    
+    fsize = GET_SIZE(FTRP(bp));
+    falloc = GET_ALLOC(FTRP(bp));
+
     if (hsize == 0) {
         printf("%p: EOL\n", bp);
         return;
