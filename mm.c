@@ -178,7 +178,7 @@ void *mm_malloc(size_t pl_size)
     /* Search the free list for a fit */
     if ((bp = find_fit(block_size)) != NULL) {
         place(bp, block_size);
-        return bp + 12;
+        return bp + HDRSIZE;
     }
 
     /* No fit found. Get more memory and place the block */
@@ -189,7 +189,7 @@ void *mm_malloc(size_t pl_size)
     }    //printf("alloc: %p\n", bp);
     place(bp, block_size);
     
-    return bp + 12;
+    return bp + HDRSIZE;
 } 
 /* $end mmmalloc */
 
@@ -199,7 +199,7 @@ void *mm_malloc(size_t pl_size)
 /* $begin mmfree */
 void mm_free(void *bp)
 {
-    bp -= 12;
+    bp -= HDRSIZE;
     size_t size = GET_SIZE(bp);
 
     // fix header and footer
@@ -242,28 +242,28 @@ void *mm_realloc(void *ptr, size_t size)
     }
 
     // return same pointer if large enough
-    size_t old_alloc_size = GET_SIZE(ptr);
+    size_t old_alloc_size = GET_SIZE(ptr - HDRSIZE);
     if (old_alloc_size >= size + OVERHEAD) {
         return ptr;
     }
 
     // check if block behind is free and large enough for the realloc
-    if (!GET_ALLOC(ptr + old_alloc_size)) {
-        size_t block_behind_size = GET_SIZE(ptr + old_alloc_size);
+    if (!GET_ALLOC(ptr - HDRSIZE + old_alloc_size)) {
+        size_t block_behind_size = GET_SIZE(ptr - HDRSIZE + old_alloc_size);
         size_t expanded_block_size = old_alloc_size + block_behind_size;
         if (expanded_block_size >= size + OVERHEAD) {
-            void *free_block = ptr + old_alloc_size;
+            void *free_block = ptr - HDRSIZE + old_alloc_size;
 
             // change header
-            PUT(ptr, PACK(expanded_block_size, 1));
+            PUT(ptr - HDRSIZE, PACK(expanded_block_size, 1));
             // change footer
-            PUT(ptr + expanded_block_size - WSIZE, PACK(expanded_block_size, 1));
+            PUT(ptr - HDRSIZE + expanded_block_size - WSIZE, PACK(expanded_block_size, 1));
 
             // remove block from list
             // prev->next = next
             PUT(PREV_BLKP(free_block) + WSIZE, NEXT_BLKP(free_block));
             // next->prev = prev
-            PUT(NEXT_BLKP(free_block) + DSIZE, NEXT_BLKP(free_block));
+            PUT(NEXT_BLKP(free_block) + DSIZE, PREV_BLKP(free_block));
 
             return ptr;
         }
