@@ -58,8 +58,8 @@ team_t team = {
 void mm_checkheap(int verbose);
 static void *extend_heap(size_t size);
 static size_t *find_fit(size_t asize);
-static int find_and_coalesce();
 static void place(char *bp, size_t asize);
+static void push(char *bp);
 
 static void *coalesce(void *bp);
 static void printblock(void *bp); 
@@ -72,7 +72,7 @@ static void checkblock(void *bp);
 #define HDRSIZE 12          //size of HDR
 #define OVERHEAD 16
 #define MINBLOCKSIZE 32
-#define CHUNKSIZE (1<<7)
+#define CHUNKSIZE (1<<8)
 // min payload space (8) + head + nxt + prv + tail = 32
 
 /* rounds up to the nearest multiple of ALIGNMENT */
@@ -91,22 +91,23 @@ static void checkblock(void *bp);
 #define PUT(p, val)    (*(unsigned int *)(p) = (val)) 
 
 // read the size and alloc fields from addr. p
-#define GET_SIZE(p) (GET(p) & ~0x7)
-#define GET_ALLOC(p) (GET(p) & 0x1)
+#define GET_SIZE(p)     (GET(p) & ~0x7)
+#define GET_ALLOC(p)    (GET(p) & 0x1)
 
 // Next ptr is 4 bytes forwards, directly behind the normal header
 // prev ptr is 4 bytes after that
 #define GET_NEXT_PTR(p) (GET(p + WSIZE))
 #define GET_PREV_PTR(p) (GET(p + DSIZE))
 
-// compute addr of next and prev block
-//#define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(((char *)(bp) - WSIZE)))
-#define NEXT_BLKP(bp) *((size_t *)(bp + WSIZE))
-#define PREV_BLKP(bp) *((size_t *)(bp + DSIZE))
+// Pointer manipulation
+#define PREV_BLKP(bp)   *((size_t *)(bp + DSIZE))     //prev pointer on free list
+#define NEXT_BLKP(bp)   *((size_t *)(bp + WSIZE))     //next pointer on free list
+#define ABOVE_BLKP(bp)  ((char *)bp - GET_SIZE(bp))  //prev block on heap
+#define BELOW_BLKP(bp)  ((char *)bp + GET_SIZE(bp))  //next block on heap
+#define FTR(bp)         (BELOW_BLKP(bp) - WSIZE)
 
-// Pointer to first block on heap
+// Pointers to prologue and epilogue
 static char *prologue_pointer;
-// pointer to epilogue
 static char *epilogue_pointer;
 
 /* 
@@ -194,11 +195,11 @@ void *mm_malloc(size_t pl_size)
 void mm_free(void *bp)
 {
     bp -= HDRSIZE;
-    size_t size = GET_SIZE(bp);
+    size_t block_size = GET_SIZE(bp);
 
     // fix header and footer
-    PUT(bp, PACK(size, 0));
-    PUT(bp + size - WSIZE, PACK(size, 0));
+    PUT(bp, PACK(block_size, 0));
+    PUT(FTR(bp), PACK(block_size, 0));
 
     // add block to free list
     // freeblock->next = epilogoue
@@ -214,7 +215,6 @@ void mm_free(void *bp)
     PUT(epilogue_pointer + DSIZE, bp);
 
     coalesce(bp);
-    
 }
 
 /* $end mmfree */
@@ -237,22 +237,22 @@ void *mm_realloc(void *ptr, size_t size)
 
     ptr -= 12;
     // return same pointer if large enough
-    size_t old_alloc_size = GET_SIZE(ptr - HDRSIZE);
+    size_t old_alloc_size = GET_SIZE(ptr);
     if (old_alloc_size >= size + OVERHEAD) {
         return ptr + 12;
     }
     
     // check if block behind is free and large enough for the realloc
-    if (!GET_ALLOC(ptr - HDRSIZE + old_alloc_size)) {
-        size_t block_behind_size = GET_SIZE(ptr - HDRSIZE + old_alloc_size);
+    if (!GET_ALLOC(ptr + old_alloc_size)) {
+        size_t block_behind_size = GET_SIZE(ptr + old_alloc_size);
         size_t expanded_block_size = old_alloc_size + block_behind_size;
         if (expanded_block_size >= size + OVERHEAD) {
-            void *free_block = ptr - HDRSIZE + old_alloc_size;
+            void *free_block = ptr + old_alloc_size;
 
             // change header
-            PUT(ptr - HDRSIZE, PACK(expanded_block_size, 1));
+            PUT(ptr, PACK(expanded_block_size, 1));
             // change footer
-            PUT(ptr - HDRSIZE + expanded_block_size - WSIZE, PACK(expanded_block_size, 1));
+            PUT(FTR(ptr), PACK(expanded_block_size, 1));
 
             // remove block from list
             // prev->next = next
@@ -323,54 +323,88 @@ static void place(char *bp, size_t requested_size)
 /* $end mmplace-proto */
 {
     size_t block_size = GET_SIZE(bp);
-    size_t remain = block_size - requested_size;
-
+    size_t remaining_size = block_size - requested_size;
+    
+    // remove the block from the free list
+    // prev->next = next
+    PUT(PREV_BLKP(bp) + WSIZE, NEXT_BLKP(bp));
+    // next->prev = prev
+    PUT(NEXT_BLKP(bp) + DSIZE, PREV_BLKP(bp));
+    
     // if block is larger than the requested block
     // either this or leave the rest to have a chance of being coalesced
-    if (remain > OVERHEAD) {
-        char *free_block = bp + requested_size;
-
-        // split block and update pointers
-        // change pointers pointing to the old block to point to the new block
-        // prev->next = new
-        PUT(PREV_BLKP(bp) + WSIZE, free_block);
-
-        // next->prev = new
-        PUT(NEXT_BLKP(bp) + DSIZE, free_block);
-
-        // shrink the empty block
+    if (remaining_size > MINBLOCKSIZE) {
+        
+        /* Allocate in te middle of block
+        char *alloced_block = bp + remaining_size;
+         
+        // Shrink the empty block
         // create header
-        PUT(free_block, PACK(remain, 0));
-
+        PUT(bp, PACK(remaining_size, 0));
         // create footer
-        PUT(free_block + remain - WSIZE, PACK(remain, 0));
-
-        // new->prev = bp->prev
-        PUT(free_block + DSIZE, PREV_BLKP(bp));
-
-        // new->next = bp->next
-        PUT(free_block + WSIZE, NEXT_BLKP(bp));
-
-        // fix allocated block
+        PUT(FTR(bp), PACK(remaining_size, 0));
+        
+        // Fix allocated block
+        // header
+        PUT(alloced_block, PACK(requested_size, 1));
+        // Footer
+        PUT(FTR(alloced_block), PACK(requested_size, 1));
+        */
+        // Allocate in the front of block
+        char *free_block = bp + requested_size;
+        // Fix allocated block
         // header
         PUT(bp, PACK(requested_size, 1));
+        // Footer
+        PUT(FTR(bp), PACK(requested_size, 1));
 
-        // footer
-        PUT(bp + requested_size - WSIZE, PACK(requested_size, 1));
+        // Shrink the empty block
+        // create header
+        PUT(free_block, PACK(remaining_size, 0));
+        // create footer
+        PUT(FTR(free_block), PACK(remaining_size, 0));
+
+        /* Put free block in back of list
+        // Fix free block pointers
+        // new->next = epilogue
+        PUT(free_block + WSIZE, epilogue_pointer);
+        // new->prev = epilogue->prev
+        PUT(free_block + DSIZE, PREV_BLKP(epilogue_pointer));
+
+        // Connect free block to back of free list
+        // epilogue->prev->next = newblock
+        PUT(PREV_BLKP(epilogue_pointer) + WSIZE, free_block);
+        // epilogue->prev = newblock
+        PUT(epilogue_pointer + DSIZE, free_block);
+        */
+
+        // Put free block in front of list
+        // Fix free block pointers
+        // new->prev = prologue
+        PUT(free_block + DSIZE, prologue_pointer);
+        // new->next = prologue->prev
+        PUT(free_block + WSIZE, NEXT_BLKP(prologue_pointer));
+
+        // Connect free block to front of free list
+        // prologue->next->prev = newblock
+        PUT(NEXT_BLKP(prologue_pointer) + DSIZE, free_block);
+        // prologue->next = newblock
+        PUT(prologue_pointer + WSIZE, free_block);
+        
     } 
     else {
+        
+        /* Only needed for alocation in the middle
         // remove the block from the free list
         // prev->next = next
         PUT(PREV_BLKP(bp) + WSIZE, NEXT_BLKP(bp));
-
         // next->prev = prev
         PUT(NEXT_BLKP(bp) + DSIZE, PREV_BLKP(bp));
-
+        */
         // update header
         PUT(bp, PACK(block_size, 1));
-
         // update footer
-        PUT(bp + block_size - WSIZE, PACK(block_size, 1));
+        PUT(FTR(bp), PACK(block_size, 1));
     }
 }
 /* $end mmplace */
@@ -394,23 +428,6 @@ static size_t *find_fit(size_t asize)
 
     return NULL; // no fit
 }
-
-/* Search through list and coalesce when possible */
-static int find_and_coalesce()
-{
-    int did_coalesce = 0;
-    void *bp = PREV_BLKP(epilogue_pointer);
-
-    while (GET_SIZE(bp - WSIZE) != 0) {
-        if(!GET_ALLOC(bp) && !GET_ALLOC(bp - WSIZE)) {
-            coalesce_above(bp);
-            did_coalesce += 1;
-        }
-        bp -= GET_SIZE(bp - WSIZE);
-    }
-    return did_coalesce;
-}
-
 
 /*
  * coalesce - boundary tag coalescing. Return ptr to coalesced block
@@ -451,7 +468,7 @@ void coalesce_above(void *bp)
 
     // fix header and footer
     PUT(bp - above_size, PACK(size + above_size, 0));
-    PUT(bp + size - WSIZE, PACK(size + above_size, 0));
+    PUT(FTR(bp), PACK(size + above_size, 0));
 
     // remove below block from free list
     // prev->next = below_next
