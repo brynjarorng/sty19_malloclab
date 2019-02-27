@@ -56,7 +56,7 @@ team_t team = {
 
 // function decleration
 void mm_checkheap(int verbose);
-static void *extend_heap(size_t word);
+static void *extend_heap(size_t size);
 static size_t *find_fit(size_t asize);
 static void place(char *bp, size_t asize);
 
@@ -143,7 +143,7 @@ int mm_init(void)
     epilogue_pointer += 2*DSIZE;
 
     /* Extend the empty heap with a free block of CHUNKSIZE bytes */
-    if (extend_heap(CHUNKSIZE/WSIZE) == NULL) {
+    if (extend_heap(CHUNKSIZE) == NULL) {
         return -1;
     }
     return 0;
@@ -184,10 +184,9 @@ void *mm_malloc(size_t size)
     /* No fit found. Get more memory and place the block */
     
     extendsize = ALIGN(MAX(asize,CHUNKSIZE));
-    if ((bp = extend_heap(extendsize/WSIZE)) == NULL) {
+    if ((bp = extend_heap(extendsize)) == NULL) {
         return NULL;
     }
-    //printf("alloc: %p\n", bp);
     place(bp, asize);
     
     return bp + 12;
@@ -244,7 +243,7 @@ void *mm_realloc(void *ptr, size_t size)
 
     // return same pointer if large enough
     size_t old_alloc_size = GET_SIZE(ptr);
-    if (old_alloc_size >= size + 2*DSIZE) {
+    if (old_alloc_size >= (size + 2*DSIZE)) {
         return ptr;
     }
 
@@ -292,13 +291,10 @@ void *mm_realloc(void *ptr, size_t size)
 /* 
  * extend_heap - Extend heap with free block and return its block pointer
  */
-static void *extend_heap(size_t words) 
+static void *extend_heap(size_t size) 
 {
     char *bp;
-    size_t size;
-        
-    /* Allocate an even number of words to maintain alignment */
-    size = (words % 2) ? (words+1) * WSIZE : words * WSIZE;
+
     if ((bp = mem_sbrk(size)) == (void *)-1) {
         return NULL;
     }
@@ -406,8 +402,7 @@ static size_t *find_fit(size_t asize)
 
     while (GET_SIZE(bp) != 0) {
         // check if block is sufficently large
-        if(GET_SIZE(bp) >= (int)asize) {
-            //printf("%p, %p\n", prologue_pointer, bp); 
+        if(GET_SIZE(bp) >= (size_t)asize) { 
             return bp;
         }
 
@@ -470,50 +465,20 @@ void coalesce_above(void *bp)
 
 void mm_checkheap(int verbose)
 {
-    int numFree1 = 0;
+    
     int numFree2 = 0;
     void *bp = epilogue_pointer;
-    int memAddr[1000];
     int memAddrCounter = 0;
-    int freeBlocks[1000];
     int freeBlocksCounter = 0;
+    size_t freeBlocks[1000];
 
     if (verbose) {
         printf("Heap (%p):\n", epilogue_pointer);
     }
 
-    // check prologue and epilogue blocks 
-    if ((GET_SIZE(epilogue_pointer) != DSIZE) || !GET_ALLOC(epilogue_pointer)) {
-        printf("Bad prologue header\n");
-    }
-    checkblock(epilogue_pointer);
-
-
-    // loop through all blocks in order, check for cycles, count free blocks
-    // coalesc check, all valid addresses
-    for(bp; GET_SIZE(bp) > 0; bp = NEXT_BLKP(bp)) {
-        // check if addresses allign up with offset
-        if (verbose) {
-            printblock(bp);
-	    }
-        checkblock(bp);
-
-        // check number of free blocks
-        if(GET_ALLOC(bp)) {
-            numFree1++;
-        }
-
-        // add all free blocks to a list
-        if(GET_ALLOC(bp)) {
-            freeBlocks[freeBlocksCounter++] = (size_t)bp;
-        }
-    }
-
     if ((GET_SIZE(bp) != 0) || !(GET_ALLOC(bp))) {
         printf("Bad epilogue header\n");
     }
-
-    printf("%d\n", numFree1);
 
     // check number of free blocks in the explicit list
     // walk list forward
@@ -531,40 +496,17 @@ void mm_checkheap(int verbose)
                 break;
             }
         }
-
-        // check if address has already been added
-        for (int i = 0; i < memAddrCounter; i++) {
-            if ((size_t)bp == memAddr[i]) {
-                printf("%p: Address already in list!\n", bp);
-                break;
-            }
-        }
-
         numFree2++;
-        memAddr[memAddrCounter++] = (size_t)bp;
-    }
-
-    // check if implicit and explicit list count the same number of free blocks
-    if (numFree1 != numFree2) {
-        printf("not the same number of blocks in implicit and explicit list - i: %d, e: %d\n", numFree1, numFree2);
     }
 
     // walk list backward
+    memAddrCounter = numFree2;
     for(bp; bp == epilogue_pointer && bp != NULL; GET_PREV_PTR(bp)) {
         // check if memAddrCounter is negative. Some extra nodes in this list or loops
         if(memAddrCounter < 0) {
             printf("prev pointer list incorrect. contains loops or too many nodes!\n");
         }
-        
-        if(memAddr[--memAddrCounter] == (size_t)bp) {
-            printf("List not in same order backwards and forwards!\n");
-            break;
-        }
     }
-    if (memAddrCounter != 0) {
-         printf("note the same number of addresses up and down the list!\n");
-    }
-
 }
 
 static void printblock(void *bp) 
@@ -573,8 +515,6 @@ static void printblock(void *bp)
 
     hsize = GET_SIZE(bp);
     halloc = GET_ALLOC(bp);  
-    //fsize = GET_SIZE(FTRP(bp));
-    //falloc = GET_ALLOC(FTRP(bp));  
     
     if (hsize == 0) {
         printf("%p: EOL\n", bp);
@@ -591,7 +531,7 @@ static void checkblock(void *bp)
     if ((size_t)bp % 8) {
         printf("Error: %p is not doubleword aligned\n", bp);
     }
-    /*if (GET(bp) != GET(FTRP(bp))) {
+    if (GET(bp) != GET(bp + GET_SIZE(bp) - WSIZE)) {
         printf("Error: header does not match footer\n");
-    }*/
+    }
 }
