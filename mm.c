@@ -72,6 +72,7 @@ static void checkblock(void *bp);
 #define HDRSIZE 12          //size of HDR
 #define OVERHEAD 16
 #define MINBLOCKSIZE 32
+#define SMBLCKSIZE 48
 #define CHUNKSIZE (1<<8)
 // min payload space (8) + head + nxt + prv + tail = 32
 
@@ -200,19 +201,9 @@ void mm_free(void *bp)
     // fix header and footer
     PUT(bp, PACK(block_size, 0));
     PUT(FTRP(bp), PACK(block_size, 0));
-
-    // add block to free list
-    // freeblock->next = epilogoue
-    PUT(bp + WSIZE, epilogue_pointer);
-
-    // freeblock->prev = epilogue->prev
-    PUT(bp + DSIZE, PREV_BLKP(epilogue_pointer));
-
-    // epilogue->prev->next = freeblock
-    PUT(PREV_BLKP(epilogue_pointer) + WSIZE, bp);
-
-    // epilogue->prev = freeblock
-    PUT(epilogue_pointer + DSIZE, bp);
+    
+    // Insert block to free list
+    mm_insert(bp);
 
     coalesce(bp);
 }
@@ -222,6 +213,35 @@ void mm_free(void *bp)
 void mm_insert(void *bp)
 {
 
+    // Small block are added to the back of the list
+    if(GET_SIZE(bp) <= SMBLCKSIZE) {
+        // Fix free block pointers
+        // new->next = epilogue
+        PUT(bp + WSIZE, epilogue_pointer);
+        // new->prev = epilogue->prev
+        PUT(bp + DSIZE, PREV_BLKP(epilogue_pointer));
+
+        // Connect free block to back of free list
+        // epilogue->prev->next = newblock
+        PUT(PREV_BLKP(epilogue_pointer) + WSIZE, bp);
+        // epilogue->prev = newblock
+        PUT(epilogue_pointer + DSIZE, bp);
+    }
+
+    // Other blocks are added to the front of the list
+    else {
+        // Fix new block pointers
+        // new->prev = prologue
+        PUT(bp + DSIZE, prologue_pointer);
+        // new->next = prologue->prev
+        PUT(bp + WSIZE, NEXT_BLKP(prologue_pointer));
+
+        // Connect free block to front of free list
+        // prologue->next->prev = newblock
+        PUT(NEXT_BLKP(prologue_pointer) + DSIZE, bp);
+        // prologue->next = newblock
+        PUT(prologue_pointer + WSIZE, bp);
+    }
 }
 
 void mm_remove(void *bp)
@@ -344,73 +364,22 @@ static void place(char *bp, size_t requested_size)
     // if block is larger than the requested block
     // either this or leave the rest to have a chance of being coalesced
     if (remaining_size > MINBLOCKSIZE) {
-        
-        /* Allocate in te middle of block
-        char *alloced_block = bp + remaining_size;
-         
-        // Shrink the empty block
-        // create header
-        PUT(bp, PACK(remaining_size, 0));
-        // create footer
-        PUT(FTRP(bp), PACK(remaining_size, 0));
-        
-        // Fix allocated block
-        // header
-        PUT(alloced_block, PACK(requested_size, 1));
-        // Footer
-        PUT(FTRP(alloced_block), PACK(requested_size, 1));
-        */
-        // Allocate in the front of block
         char *free_block = bp + requested_size;
-        // Fix allocated block
-        // header
+
+        // Set allocated header
         PUT(bp, PACK(requested_size, 1));
-        // Footer
+        // Set allocated Footer
         PUT(FTRP(bp), PACK(requested_size, 1));
 
-        // Shrink the empty block
-        // create header
+        // Set free header
         PUT(free_block, PACK(remaining_size, 0));
-        // create footer
+        // Set free footer
         PUT(FTRP(free_block), PACK(remaining_size, 0));
 
-        /* Put free block in back of list
-        // Fix free block pointers
-        // new->next = epilogue
-        PUT(free_block + WSIZE, epilogue_pointer);
-        // new->prev = epilogue->prev
-        PUT(free_block + DSIZE, PREV_BLKP(epilogue_pointer));
-
-        // Connect free block to back of free list
-        // epilogue->prev->next = newblock
-        PUT(PREV_BLKP(epilogue_pointer) + WSIZE, free_block);
-        // epilogue->prev = newblock
-        PUT(epilogue_pointer + DSIZE, free_block);
-        */
-
-        // Put free block in front of list
-        // Fix free block pointers
-        // new->prev = prologue
-        PUT(free_block + DSIZE, prologue_pointer);
-        // new->next = prologue->prev
-        PUT(free_block + WSIZE, NEXT_BLKP(prologue_pointer));
-
-        // Connect free block to front of free list
-        // prologue->next->prev = newblock
-        PUT(NEXT_BLKP(prologue_pointer) + DSIZE, free_block);
-        // prologue->next = newblock
-        PUT(prologue_pointer + WSIZE, free_block);
-        
+        // Insert free block to free list
+        mm_insert(free_block);        
     } 
     else {
-        
-        /* Only needed for alocation in the middle
-        // remove the block from the free list
-        // prev->next = next
-        PUT(PREV_BLKP(bp) + WSIZE, NEXT_BLKP(bp));
-        // next->prev = prev
-        PUT(NEXT_BLKP(bp) + DSIZE, PREV_BLKP(bp));
-        */
         // update header
         PUT(bp, PACK(block_size, 1));
         // update footer
@@ -420,20 +389,35 @@ static void place(char *bp, size_t requested_size)
 /* $end mmplace */
 
 /* 
- * find_fit - Find a fit for a block with asize bytes 
+ * find_fit - Find a fit for the size of the block
  */
-static size_t *find_fit(size_t asize)
+static size_t *find_fit(size_t block_size)
 {
-    void *bp = NEXT_BLKP(prologue_pointer);
+    if (block_size <= SMBLCKSIZE) {
+        void *bp = NEXT_BLKP(prologue_pointer);
 
-    while (GET_SIZE(bp) != 0) {
-        // check if block is sufficently large
-        if(GET_SIZE(bp) >= (size_t)asize) { 
-            return bp;
+        while (GET_SIZE(bp) != 0) {
+            // check if block is sufficently large
+            if(GET_SIZE(bp) >= (size_t)block_size) { 
+                return bp;
+            }
+
+            // get next block and check that
+            bp = NEXT_BLKP(bp);
         }
+    }
+    else {
+        void *bp = PREV_BLKP(epilogue_pointer);
 
-        // get next block and check that
-        bp = NEXT_BLKP(bp);
+        while (GET_SIZE(bp) != 0) {
+            // check if block is sufficently large
+            if(GET_SIZE(bp) >= (size_t)block_size) { 
+                return bp;
+            }
+
+            // get next block and check that
+            bp = PREV_BLKP(bp);
+        }
     }
 
     return NULL; // no fit
