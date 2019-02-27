@@ -72,8 +72,8 @@ static void checkblock(void *bp);
 #define HDRSIZE 12          //size of HDR
 #define OVERHEAD 16
 #define MINBLOCKSIZE 32
-#define SMBLCKSIZE 48
-#define CHUNKSIZE (1<<8)
+#define SMBLCKSIZE (1<<10)
+#define CHUNKSIZE (1<<12)
 // min payload space (8) + head + nxt + prv + tail = 32
 
 /* rounds up to the nearest multiple of ALIGNMENT */
@@ -398,7 +398,7 @@ static size_t *find_fit(size_t block_size)
 
         while (GET_SIZE(bp) != 0) {
             // check if block is sufficently large
-            if(GET_SIZE(bp) >= (size_t)block_size) { 
+            if(GET_SIZE(bp) >= block_size) { 
                 return bp;
             }
 
@@ -411,7 +411,7 @@ static size_t *find_fit(size_t block_size)
 
         while (GET_SIZE(bp) != 0) {
             // check if block is sufficently large
-            if(GET_SIZE(bp) >= (size_t)block_size) { 
+            if(GET_SIZE(bp) >= block_size) { 
                 return bp;
             }
 
