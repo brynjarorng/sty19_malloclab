@@ -72,7 +72,7 @@ static void checkblock(void *bp);
 #define HDRSIZE 12          //size of HDR
 #define OVERHEAD 16
 #define MINBLOCKSIZE 32
-#define CHUNKSIZE (1<<7)
+#define CHUNKSIZE (1<<8)
 // min payload space (8) + head + nxt + prv + tail = 32
 
 /* rounds up to the nearest multiple of ALIGNMENT */
@@ -103,6 +103,9 @@ static void checkblock(void *bp);
 //#define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(((char *)(bp) - WSIZE)))
 #define NEXT_BLKP(bp) *((size_t *)(bp + WSIZE))
 #define PREV_BLKP(bp) *((size_t *)(bp + DSIZE))
+
+// get the address of the pointer block
+#define FTRP(bp) (bp + GET_SIZE(bp) - WSIZE)
 
 // Pointer to first block on heap
 static char *prologue_pointer;
@@ -198,7 +201,7 @@ void mm_free(void *bp)
 
     // fix header and footer
     PUT(bp, PACK(size, 0));
-    PUT(bp + size - WSIZE, PACK(size, 0));
+    PUT(FTRP(bp), PACK(size, 0));
 
     // add block to free list
     // freeblock->next = epilogoue
@@ -301,7 +304,7 @@ static void *extend_heap(size_t size)
     PUT(bp, PACK(size, 0));                            // put header
     PUT(bp + WSIZE, epilogue_pointer);                 // next pointer
     // prev pointer does not need to be changed, it still points to a valid block
-    PUT(epilogue_pointer - WSIZE, PACK(size, 0));      // put footer
+    PUT(FTRP(bp), PACK(size, 0));                      // put footer
 
     // write new epilogue block
     PUT(epilogue_pointer, PACK(0, 1));                  // put header
@@ -343,7 +346,7 @@ static void place(char *bp, size_t requested_size)
         PUT(free_block, PACK(remain, 0));
 
         // create footer
-        PUT(free_block + remain - WSIZE, PACK(remain, 0));
+        PUT(FTRP(free_block), PACK(remain, 0));
 
         // new->prev = bp->prev
         PUT(free_block + DSIZE, PREV_BLKP(bp));
@@ -356,7 +359,7 @@ static void place(char *bp, size_t requested_size)
         PUT(bp, PACK(requested_size, 1));
 
         // footer
-        PUT(bp + requested_size - WSIZE, PACK(requested_size, 1));
+        PUT(FTRP(bp), PACK(requested_size, 1));
     } 
     else {
         // remove the block from the free list
@@ -370,7 +373,7 @@ static void place(char *bp, size_t requested_size)
         PUT(bp, PACK(block_size, 1));
 
         // update footer
-        PUT(bp + block_size - WSIZE, PACK(block_size, 1));
+        PUT(FTRP(bp), PACK(block_size, 1));
     }
 }
 /* $end mmplace */
@@ -420,8 +423,6 @@ static void *coalesce(void *bp)
     size_t prev_alloc = GET_ALLOC(bp - WSIZE);
     size_t size = GET_SIZE(bp);
     size_t next_alloc = GET_ALLOC(bp + size);
-    //printf("pa: %p, p: %d, n: %d\n", bp, prev_alloc, next_alloc);
-    //fflush(stdout);
 
     if (prev_alloc && next_alloc) {            // Case 1 - Nothing
         return bp;
@@ -451,7 +452,7 @@ void coalesce_above(void *bp)
 
     // fix header and footer
     PUT(bp - above_size, PACK(size + above_size, 0));
-    PUT(bp + size - WSIZE, PACK(size + above_size, 0));
+    PUT(FTRP(bp), PACK(size + above_size, 0));
 
     // remove below block from free list
     // prev->next = below_next
@@ -514,7 +515,9 @@ static void printblock(void *bp)
     size_t hsize, halloc, fsize, falloc;
 
     hsize = GET_SIZE(bp);
-    halloc = GET_ALLOC(bp);  
+    halloc = GET_ALLOC(bp);
+    fsize = GET_SIZE(FTRP(bp));
+    falloc = GET_ALLOC(FTRP(bp));
     
     if (hsize == 0) {
         printf("%p: EOL\n", bp);
