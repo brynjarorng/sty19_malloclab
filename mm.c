@@ -181,7 +181,7 @@ void *mm_malloc(size_t pl_size)
     size_t extend_size = ALIGN(MAX(block_size, CHUNKSIZE));     /* amount to extend heap if no fit */
     if ((bp = extend_heap(extend_size)) == NULL) {
         return NULL;
-    }    //printf("alloc: %p\n", bp);
+    }
     place(bp, block_size);
     
     return bp + HDRSIZE;
@@ -209,6 +209,7 @@ void mm_free(void *bp)
 
 /* $end mmfree */
 
+// Insert block into free list
 void mm_insert(void *bp)
 {
 
@@ -243,9 +244,13 @@ void mm_insert(void *bp)
     }
 }
 
+// Remove block from free list (coalesce)
 void mm_remove(void *bp)
 {
-
+    // prev->next = next
+    PUT(PREV_BLKP(bp) + WSIZE, NEXT_BLKP(bp));
+    // next->prev = prev
+    PUT(NEXT_BLKP(bp) + DSIZE, PREV_BLKP(bp));
 }
 
 /*
@@ -285,10 +290,7 @@ void *mm_realloc(void *ptr, size_t size)
             PUT(FTRP(ptr), PACK(expanded_block_size, 1));
 
             // remove block from list
-            // prev->next = next
-            PUT(PREV_BLKP(free_block) + WSIZE, NEXT_BLKP(free_block));
-            // next->prev = prev
-            PUT(NEXT_BLKP(free_block) + DSIZE, PREV_BLKP(free_block));
+            mm_remove(free_block);
 
             return ptr + 12;
         }
@@ -356,10 +358,7 @@ static void place(char *bp, size_t requested_size)
     size_t remaining_size = block_size - requested_size;
     
     // remove the block from the free list
-    // prev->next = next
-    PUT(PREV_BLKP(bp) + WSIZE, NEXT_BLKP(bp));
-    // next->prev = prev
-    PUT(NEXT_BLKP(bp) + DSIZE, PREV_BLKP(bp));
+    mm_remove(bp);
     
     // if block is larger than the requested block
     // either this or leave the rest to have a chance of being coalesced
@@ -463,11 +462,8 @@ void coalesce_above(void *bp)
     PUT(FTRP(bp), PACK(size + above_size, 0));
 
     // remove below block from free list
-    // prev->next = below_next
-    PUT(PREV_BLKP(bp) + WSIZE, NEXT_BLKP(bp));
+    mm_remove(bp);
 
-    // next->prev = below_prev
-    PUT(NEXT_BLKP(bp) + DSIZE, PREV_BLKP(bp));
     return bp - above_size;
 }
 
