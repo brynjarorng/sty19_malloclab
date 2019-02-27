@@ -58,8 +58,8 @@ team_t team = {
 void mm_checkheap(int verbose, int full_check);
 static void *extend_heap(size_t size);
 static size_t *find_fit(size_t asize);
-static int find_and_coalesce();
 static void place(char *bp, size_t asize);
+static void push(char *bp);
 
 static void *coalesce(void *bp);
 static void printblock(void *bp); 
@@ -91,20 +91,23 @@ static void checkblock(void *bp);
 #define PUT(p, val)    (*(unsigned int *)(p) = (val)) 
 
 // read the size and alloc fields from addr. p
-#define GET_SIZE(p) (GET(p) & ~0x7)
-#define GET_ALLOC(p) (GET(p) & 0x1)
+#define GET_SIZE(p)     (GET(p) & ~0x7)
+#define GET_ALLOC(p)    (GET(p) & 0x1)
 
 // compute addr of next and prev block
 //#define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(((char *)(bp) - WSIZE)))
 #define NEXT_BLKP(bp) *((size_t *)(bp + WSIZE))
 #define PREV_BLKP(bp) *((size_t *)(bp + DSIZE))
 
-// get the address of the pointer block
-#define FTRP(bp) (bp + GET_SIZE(bp) - WSIZE)
+// Pointer manipulation
+#define PREV_BLKP(bp)   *((size_t *)(bp + DSIZE))     //prev pointer on free list
+#define NEXT_BLKP(bp)   *((size_t *)(bp + WSIZE))     //next pointer on free list
+#define ABOVE_BLKP(bp)  ((char *)bp - GET_SIZE(bp))  //prev block on heap
+#define BELOW_BLKP(bp)  ((char *)bp + GET_SIZE(bp))  //next block on heap
+#define FTRP(bp)         (BELOW_BLKP(bp) - WSIZE)
 
-// Pointer to first block on heap
+// Pointers to prologue and epilogue
 static char *prologue_pointer;
-// pointer to epilogue
 static char *epilogue_pointer;
 
 /* 
@@ -169,7 +172,7 @@ void *mm_malloc(size_t pl_size)
     /* Search the free list for a fit */
     if ((bp = find_fit(block_size)) != NULL) {
         place(bp, block_size);
-        return bp + 12;
+        return bp + HDRSIZE;
     }
 
     /* No fit found. Get more memory and place the block */
@@ -180,7 +183,7 @@ void *mm_malloc(size_t pl_size)
     }    //printf("alloc: %p\n", bp);
     place(bp, block_size);
     
-    return bp + 12;
+    return bp + HDRSIZE;
 } 
 /* $end mmmalloc */
 
@@ -190,12 +193,12 @@ void *mm_malloc(size_t pl_size)
 /* $begin mmfree */
 void mm_free(void *bp)
 {
-    bp -= 12;
-    size_t size = GET_SIZE(bp);
+    bp -= HDRSIZE;
+    size_t block_size = GET_SIZE(bp);
 
     // fix header and footer
-    PUT(bp, PACK(size, 0));
-    PUT(FTRP(bp), PACK(size, 0));
+    PUT(bp, PACK(block_size, 0));
+    PUT(FTRP(bp), PACK(block_size, 0));
 
     // add block to free list
     // freeblock->next = epilogoue
@@ -211,10 +214,19 @@ void mm_free(void *bp)
     PUT(epilogue_pointer + DSIZE, bp);
 
     coalesce(bp);
-    
 }
 
 /* $end mmfree */
+
+void mm_insert(void *bp)
+{
+
+}
+
+void mm_remove(void *bp)
+{
+
+}
 
 /*
  * mm_realloc - naive implementation of mm_realloc
@@ -250,7 +262,7 @@ void *mm_realloc(void *ptr, size_t size)
             // change header
             PUT(ptr, PACK(expanded_block_size, 1));
             // change footer
-            PUT(ptr + expanded_block_size - WSIZE, PACK(expanded_block_size, 1));
+            PUT(FTRP(ptr), PACK(expanded_block_size, 1));
 
             // remove block from list
             // prev->next = next
@@ -321,52 +333,86 @@ static void place(char *bp, size_t requested_size)
 /* $end mmplace-proto */
 {
     size_t block_size = GET_SIZE(bp);
-    size_t remain = block_size - requested_size;
-
+    size_t remaining_size = block_size - requested_size;
+    
+    // remove the block from the free list
+    // prev->next = next
+    PUT(PREV_BLKP(bp) + WSIZE, NEXT_BLKP(bp));
+    // next->prev = prev
+    PUT(NEXT_BLKP(bp) + DSIZE, PREV_BLKP(bp));
+    
     // if block is larger than the requested block
     // either this or leave the rest to have a chance of being coalesced
-    if (remain > OVERHEAD) {
-        char *free_block = bp + requested_size;
-
-        // split block and update pointers
-        // change pointers pointing to the old block to point to the new block
-        // prev->next = new
-        PUT(PREV_BLKP(bp) + WSIZE, free_block);
-
-        // next->prev = new
-        PUT(NEXT_BLKP(bp) + DSIZE, free_block);
-
-        // shrink the empty block
+    if (remaining_size > MINBLOCKSIZE) {
+        
+        /* Allocate in te middle of block
+        char *alloced_block = bp + remaining_size;
+         
+        // Shrink the empty block
         // create header
-        PUT(free_block, PACK(remain, 0));
-
+        PUT(bp, PACK(remaining_size, 0));
         // create footer
-        PUT(FTRP(free_block), PACK(remain, 0));
-
-        // new->prev = bp->prev
-        PUT(free_block + DSIZE, PREV_BLKP(bp));
-
-        // new->next = bp->next
-        PUT(free_block + WSIZE, NEXT_BLKP(bp));
-
-        // fix allocated block
+        PUT(FTRP(bp), PACK(remaining_size, 0));
+        
+        // Fix allocated block
+        // header
+        PUT(alloced_block, PACK(requested_size, 1));
+        // Footer
+        PUT(FTRP(alloced_block), PACK(requested_size, 1));
+        */
+        // Allocate in the front of block
+        char *free_block = bp + requested_size;
+        // Fix allocated block
         // header
         PUT(bp, PACK(requested_size, 1));
-
-        // footer
+        // Footer
         PUT(FTRP(bp), PACK(requested_size, 1));
+
+        // Shrink the empty block
+        // create header
+        PUT(free_block, PACK(remaining_size, 0));
+        // create footer
+        PUT(FTRP(free_block), PACK(remaining_size, 0));
+
+        /* Put free block in back of list
+        // Fix free block pointers
+        // new->next = epilogue
+        PUT(free_block + WSIZE, epilogue_pointer);
+        // new->prev = epilogue->prev
+        PUT(free_block + DSIZE, PREV_BLKP(epilogue_pointer));
+
+        // Connect free block to back of free list
+        // epilogue->prev->next = newblock
+        PUT(PREV_BLKP(epilogue_pointer) + WSIZE, free_block);
+        // epilogue->prev = newblock
+        PUT(epilogue_pointer + DSIZE, free_block);
+        */
+
+        // Put free block in front of list
+        // Fix free block pointers
+        // new->prev = prologue
+        PUT(free_block + DSIZE, prologue_pointer);
+        // new->next = prologue->prev
+        PUT(free_block + WSIZE, NEXT_BLKP(prologue_pointer));
+
+        // Connect free block to front of free list
+        // prologue->next->prev = newblock
+        PUT(NEXT_BLKP(prologue_pointer) + DSIZE, free_block);
+        // prologue->next = newblock
+        PUT(prologue_pointer + WSIZE, free_block);
+        
     } 
     else {
+        
+        /* Only needed for alocation in the middle
         // remove the block from the free list
         // prev->next = next
         PUT(PREV_BLKP(bp) + WSIZE, NEXT_BLKP(bp));
-
         // next->prev = prev
         PUT(NEXT_BLKP(bp) + DSIZE, PREV_BLKP(bp));
-
+        */
         // update header
         PUT(bp, PACK(block_size, 1));
-
         // update footer
         PUT(FTRP(bp), PACK(block_size, 1));
     }
@@ -561,8 +607,8 @@ static void printblock(void *bp)
     hsize = GET_SIZE(bp);
     halloc = GET_ALLOC(bp);  
     fsize = GET_SIZE(FTRP(bp));
-    falloc = GET_ALLOC(FTRP(bp));  
-    
+    falloc = GET_ALLOC(FTRP(bp));
+      
     if (hsize == 0) {
         printf("%p: EOL\n", bp);
         return;
