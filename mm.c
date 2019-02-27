@@ -111,6 +111,32 @@ static void checkblock(void *bp);
 static char *prologue_pointer;
 static char *epilogue_pointer;
 
+
+/*
+        The free list is an explicit doubly linked list where only the free blocks are in it. 
+        Blocks smaller than SMBLCKSIZE get put at the back of the list while larger blocks are put
+        at the front. The fint_fit function looks for flocks for blocks amaller than SMBLCKSIZE starting at the
+        end of the list and working it's way from there while other blocks are taken from the front of the list.
+
+        This implementation uses a 12 byte header and 4 byte footer for all the blocks on the list. The payload
+        starts 12 bytes in the block. In order to make it alligned the list starts with a single 4 byte block before
+        the prologue block and all allocated blocks are a multiplication of 8 bytes. Then we do not need to think about
+        alignment when placing the blocks.
+
+        mm_free(size_t ptr) marks an incoming black as free puts blocks smaller than SMBLCKSIZE at the end of the
+        list and other blocks at the start
+
+        our block implementation:
+                                      | Address aligned by 8 bytes
+        --------------------------------------------------
+        | 4 bytes | 4 bytes | 4 bytes | N bytes | 4 bytes|
+        | alloc & | nxt ptr | prv ptr | payload | alloc  |
+        | size    |         |         | N%8 = 0 | size   |
+        --------------------------------------------------
+*/
+
+
+
 /* 
  * mm_init - Initialize the memory manager 
  */
