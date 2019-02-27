@@ -71,7 +71,7 @@ static void checkblock(void *bp);
 #define OVERHEAD 16
 #define CHUNKSIZE (1<<12)
 // min payload space (8) + head + nxt + prv + tail = 32
-#define MINCHUNKSIZE 32
+#define MINBLOCKSIZe 32
 
 /* rounds up to the nearest multiple of ALIGNMENT */
 #define ALIGN(size) (((size) + (ALIGNMENT-1)) & ~0x7)
@@ -134,18 +134,18 @@ int mm_init(void)
     size_t prologue_block_size = 16;
 
     PUT(heap_listp, PACK(0, 1));             // Prologue HDR size and alloc bit
-    PUT(heap_listp+WSIZE, heap_listp+2*DSIZE);                 // Prologue next pointer
+    PUT(heap_listp+WSIZE, heap_listp+OVERHEAD);                 // Prologue next pointer
     PUT(heap_listp+DSIZE, 0);                                  // prev pointer, always null on the head node
     PUT(heap_listp+DSIZE+WSIZE, PACK(0, 1)); // prologue footer
 
     // epilogue
-    PUT(heap_listp+2*DSIZE, PACK(0, 1));                    // Epilogue HDR size and alloc bit
-    PUT(heap_listp+2*DSIZE+WSIZE, 0);                       // Epilogue next ptr, always null
+    PUT(heap_listp+OVERHEAD, PACK(0, 1));                    // Epilogue HDR size and alloc bit
+    PUT(heap_listp+OVERHEAD+WSIZE, 0);                       // Epilogue next ptr, always null
     PUT(heap_listp+3*DSIZE, heap_listp);                    // Epilogue prev ptr
     PUT(heap_listp+7*WSIZE, PACK(0, 1));                    // Epilogue footer, size and alloc bit
 
 
-    heap_listp += 2*DSIZE;
+    heap_listp += OVERHEAD;
 
     /* Extend the empty heap with a free block of CHUNKSIZE bytes */
     if (extend_heap(48/WSIZE) == NULL) {
@@ -174,7 +174,7 @@ void *mm_malloc(size_t size)
     
     // Adjust block size to include overhead and alignment reqs.
     if (size <= DSIZE) {
-        asize = MINCHUNKSIZE;
+        asize = MINBLOCKSIZe;
     }
     else {
         asize = ALIGN(asize);
@@ -412,9 +412,9 @@ static void *coalesce(void *bp)
     }/*
     else {                                     // Case 4 - Both
         size += GET_SIZE(HDRP(PREV_BLKP(bp))) + 
-            GET_SIZE(FTRP(NEXT_BLKP(bp)));
+            GET_SIZE(FTRPP(NEXT_BLKP(bp)));
         PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
-        PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0));
+        PUT(FTRPP(NEXT_BLKP(bp)), PACK(size, 0));
         bp = PREV_BLKP(bp);
     }*/
     
@@ -527,8 +527,8 @@ static void printblock(void *bp)
 
     hsize = GET_SIZE(bp);
     halloc = GET_ALLOC(bp);  
-    //fsize = GET_SIZE(FTRP(bp));
-    //falloc = GET_ALLOC(FTRP(bp));  
+    //fsize = GET_SIZE(FTRPP(bp));
+    //falloc = GET_ALLOC(FTRPP(bp));  
     
     if (hsize == 0) {
         printf("%p: EOL\n", bp);
@@ -545,7 +545,7 @@ static void checkblock(void *bp)
     if ((size_t)bp % 8) {
         printf("Error: %p is not doubleword aligned\n", bp);
     }
-    /*if (GET(bp) != GET(FTRP(bp))) {
+    /*if (GET(bp) != GET(FTRPP(bp))) {
         printf("Error: header does not match footer\n");
     }*/
 }

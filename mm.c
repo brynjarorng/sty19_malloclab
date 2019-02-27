@@ -270,11 +270,11 @@ void *mm_realloc(void *ptr, size_t size)
         return NULL;
     }
 
-    ptr -= 12;
+    ptr -= HDRSIZE;
     // return same pointer if large enough
     size_t old_alloc_size = GET_SIZE(ptr);
     if (old_alloc_size >= size + OVERHEAD) {
-        return ptr + 12;
+        return ptr + HDRSIZE;
     }
     
     // check if block behind is free and large enough for the realloc
@@ -292,7 +292,7 @@ void *mm_realloc(void *ptr, size_t size)
             // remove block from list
             mm_remove(free_block);
 
-            return ptr + 12;
+            return ptr + HDRSIZE;
         }
     }
 
@@ -308,8 +308,8 @@ void *mm_realloc(void *ptr, size_t size)
     if (size < old_alloc_size) {
         old_alloc_size = size;
     }
-    memcpy(newp, ptr + 12, old_alloc_size);
-    mm_free(ptr + 12);
+    memcpy(newp, ptr + HDRSIZE, old_alloc_size);
+    mm_free(ptr + HDRSIZE);
     return newp;
 }
 
