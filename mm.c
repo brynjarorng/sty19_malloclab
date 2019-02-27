@@ -59,7 +59,7 @@ void mm_checkheap(int verbose, int full_check);
 static void *extend_heap(size_t size);
 static size_t *find_fit(size_t asize);
 static void place(char *bp, size_t asize);
-static void push(char *bp);
+static void set_hdr_ftr(char *bp, size_t block_size, int alloc);
 
 static void *coalesce(void *bp);
 static void printblock(void *bp); 
@@ -198,9 +198,8 @@ void mm_free(void *bp)
     size_t block_size = GET_SIZE(bp);
 
     // fix header and footer
-    PUT(bp, PACK(block_size, 0));
-    PUT(FTRP(bp), PACK(block_size, 0));
-    
+    set_hdr_ftr(bp, block_size, 0);
+
     // Insert block to free list
     mm_insert(bp);
 
@@ -284,10 +283,8 @@ void *mm_realloc(void *ptr, size_t size)
         if (expanded_block_size >= size + OVERHEAD) {
             void *free_block = ptr + old_alloc_size;
 
-            // change header
-            PUT(ptr, PACK(expanded_block_size, 1));
-            // change footer
-            PUT(FTRP(ptr), PACK(expanded_block_size, 1));
+            // Set HDR and FTR
+            set_hdr_ftr(ptr, expanded_block_size, 1);
 
             // remove block from list
             mm_remove(free_block);
@@ -330,10 +327,9 @@ static void *extend_heap(size_t size)
     epilogue_pointer += size;
 
     // init new block
-    PUT(bp, PACK(size, 0));                            // put header
+    set_hdr_ftr(bp, size, 0);                          // Set HDR and FTR
     PUT(bp + WSIZE, epilogue_pointer);                 // next pointer
     // prev pointer does not need to be changed, it still points to a valid block
-    PUT(FTRP(bp), PACK(size, 0));                      // put footer
 
     // write new epilogue block
     PUT(epilogue_pointer, PACK(0, 1));                  // put header
@@ -344,15 +340,12 @@ static void *extend_heap(size_t size)
     return coalesce(bp);
 }
 
-
 /* 
  * place - Place block of asize bytes at start of free block bp 
  *         and split if remainder would be at least minimum block size
  */
 /* $begin mmplace */
-/* $begin mmplace-proto */
 static void place(char *bp, size_t requested_size)
-/* $end mmplace-proto */
 {
     size_t block_size = GET_SIZE(bp);
     size_t remaining_size = block_size - requested_size;
@@ -365,27 +358,28 @@ static void place(char *bp, size_t requested_size)
     if (remaining_size > MINBLOCKSIZE) {
         char *free_block = bp + requested_size;
 
-        // Set allocated header
-        PUT(bp, PACK(requested_size, 1));
-        // Set allocated Footer
-        PUT(FTRP(bp), PACK(requested_size, 1));
+        // Set HDR and FTR for allocated block
+        set_hdr_ftr(bp, requested_size, 1);
 
-        // Set free header
-        PUT(free_block, PACK(remaining_size, 0));
-        // Set free footer
-        PUT(FTRP(free_block), PACK(remaining_size, 0));
+        // Set HDR and FTR for free block
+        set_hdr_ftr(free_block, remaining_size, 0);
 
         // Insert free block to free list
         mm_insert(free_block);        
     } 
     else {
-        // update header
-        PUT(bp, PACK(block_size, 1));
-        // update footer
-        PUT(FTRP(bp), PACK(block_size, 1));
+        // Update HDR and FTR
+        set_hdr_ftr(bp, block_size, 1);
     }
 }
 /* $end mmplace */
+
+static void set_hdr_ftr(char *bp, size_t block_size, int alloc)
+{
+    // set header and footer
+    PUT(bp, PACK(block_size, alloc));
+    PUT(FTRP(bp), PACK(block_size, alloc));
+}
 
 /* 
  * find_fit - Find a fit for the size of the block
@@ -458,8 +452,7 @@ void coalesce_above(void *bp)
     size_t above_size = GET_SIZE(bp - WSIZE);
 
     // fix header and footer
-    PUT(bp - above_size, PACK(size + above_size, 0));
-    PUT(FTRP(bp), PACK(size + above_size, 0));
+    set_hdr_ftr(bp - above_size, size + above_size, 0);
 
     // remove below block from free list
     mm_remove(bp);
