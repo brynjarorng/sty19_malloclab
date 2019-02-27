@@ -58,6 +58,7 @@ team_t team = {
 void mm_checkheap(int verbose);
 static void *extend_heap(size_t word);
 static size_t *find_fit(size_t asize);
+static int find_and_coalesce();
 static void place(char *bp, size_t asize);
 
 static void *coalesce(void *bp);
@@ -68,10 +69,11 @@ static void checkblock(void *bp);
 #define ALIGNMENT 8
 #define WSIZE 4
 #define DSIZE 8
+#define HDRSIZE 12          //size of HDR
 #define OVERHEAD 16
+#define MINBLOCKSIZE 32
 #define CHUNKSIZE (1<<7)
 // min payload space (8) + head + nxt + prv + tail = 32
-#define MINCHUNKSIZE 32
 
 /* rounds up to the nearest multiple of ALIGNMENT */
 #define ALIGN(size) (((size_t)(size) + (ALIGNMENT-1)) & ~0x7)
@@ -114,33 +116,32 @@ static char *epilogue_pointer;
 int mm_init(void) 
 {
     /* create the initial empty heap */
-    if ((epilogue_pointer = mem_sbrk(8*WSIZE)) == NULL) {
+    if ((prologue_pointer = mem_sbrk(8*WSIZE)) == NULL) {
         return -1;
     }
 
     // create a 4 byte padding in order to make the payloads align to 8 bits
-    PUT(epilogue_pointer, 0);
-    epilogue_pointer += 4;
-    prologue_pointer = epilogue_pointer;
+    PUT(prologue_pointer, 0);
 
     //                   Header                 |    Footer
     //      4        +     4      +     4       +      4        = 16 bytes
     // size + alloc  -  next ptr  -  prev ptr   | size + alloc
     // prologue and epilogue have the same structure
-    size_t prologue_block_size = 16;
+    
+    // setting initial prologue and epilogue pointers
+    prologue_pointer += 4;
+    epilogue_pointer = prologue_pointer + OVERHEAD;
 
-    PUT(epilogue_pointer, PACK(0, 1));             // Prologue HDR size and alloc bit
-    PUT(epilogue_pointer+WSIZE, epilogue_pointer+2*DSIZE);                 // Prologue next pointer
-    PUT(epilogue_pointer+DSIZE, 0);                                  // prev pointer, always null on the head node
-    PUT(epilogue_pointer+DSIZE+WSIZE, PACK(0, 1)); // prologue footer
+    // Prologue
+    PUT(prologue_pointer, PACK(0, 1));                  // Prologue HDR size and alloc bit
+    PUT(prologue_pointer+WSIZE, epilogue_pointer);      // Prologue next pointer
+    PUT(prologue_pointer+DSIZE, 0);                     // prev pointer, always null on the head node
+    PUT(prologue_pointer+HDRSIZE, PACK(0, 1));      // prologue footer
 
-    // epilogue
-    PUT(epilogue_pointer+2*DSIZE, PACK(0, 1));                    // Epilogue HDR size and alloc bit
-    PUT(epilogue_pointer+2*DSIZE+WSIZE, 0);                       // Epilogue next ptr, always null
-    PUT(epilogue_pointer+3*DSIZE, epilogue_pointer);                    // Epilogue prev ptr
-
-
-    epilogue_pointer += 2*DSIZE;
+    // Epilogue
+    PUT(epilogue_pointer, PACK(0, 1));                    // Epilogue HDR size and alloc bit
+    PUT(epilogue_pointer+WSIZE, 0);                       // Epilogue next ptr, always null
+    PUT(epilogue_pointer+DSIZE, prologue_pointer);                    // Epilogue prev ptr
 
     /* Extend the empty heap with a free block of CHUNKSIZE bytes */
     if (extend_heap(CHUNKSIZE/WSIZE) == NULL) {
@@ -154,41 +155,39 @@ int mm_init(void)
  * mm_malloc - Allocate a block with at least size bytes of payload 
  */
 /* $begin mmmalloc */
-void *mm_malloc(size_t size) 
+void *mm_malloc(size_t pl_size) 
 {
     //mm_checkheap(0);
-    size_t asize;      /* adjusted block size */
-    size_t extendsize; /* amount to extend heap if no fit */
+    size_t block_size;      /* adjusted block size */
     char *bp;      
 
     /* Ignore spurious requests */
-    if (size <= 0) {
+    if (pl_size <= 0) {
         return NULL;
     }
 
     
     // Adjust block size to include overhead and alignment reqs.
-    if (size <= DSIZE) {
-        asize = MINCHUNKSIZE;
+    if (pl_size < OVERHEAD) {
+        block_size = MINBLOCKSIZE;
     }
     else {
-        asize = ALIGN(size + DSIZE*2);
+        block_size = ALIGN(pl_size + OVERHEAD);
     }
     
     /* Search the free list for a fit */
-    if ((bp = find_fit(asize)) != NULL) {
-        place(bp, asize);
+    if ((bp = find_fit(block_size)) != NULL) {
+        place(bp, block_size);
         return bp + 12;
     }
 
     /* No fit found. Get more memory and place the block */
     
-    extendsize = ALIGN(MAX(asize,CHUNKSIZE));
-    if ((bp = extend_heap(extendsize/WSIZE)) == NULL) {
+    size_t extend_size = ALIGN(MAX(block_size, CHUNKSIZE));     /* amount to extend heap if no fit */
+    if ((bp = extend_heap(extend_size/WSIZE)) == NULL) {
         return NULL;
-    }
-    //printf("alloc: %p\n", bp);
-    place(bp, asize);
+    }    //printf("alloc: %p\n", bp);
+    place(bp, block_size);
     
     return bp + 12;
 } 
@@ -244,7 +243,7 @@ void *mm_realloc(void *ptr, size_t size)
 
     // return same pointer if large enough
     size_t old_alloc_size = GET_SIZE(ptr);
-    if (old_alloc_size >= size + 2*DSIZE) {
+    if (old_alloc_size >= size + OVERHEAD) {
         return ptr;
     }
 
@@ -252,7 +251,7 @@ void *mm_realloc(void *ptr, size_t size)
     if (!GET_ALLOC(ptr + old_alloc_size)) {
         size_t block_behind_size = GET_SIZE(ptr + old_alloc_size);
         size_t expanded_block_size = old_alloc_size + block_behind_size;
-        if (expanded_block_size >= size + 2*DSIZE) {
+        if (expanded_block_size >= size + OVERHEAD) {
             void *free_block = ptr + old_alloc_size;
 
             // change header
@@ -278,7 +277,7 @@ void *mm_realloc(void *ptr, size_t size)
         printf("ERROR: mm_malloc failed in mm_realloc\n");
         exit(1);
     }
-    old_alloc_size -= 2*DSIZE;
+    old_alloc_size -= OVERHEAD;
     if (size < old_alloc_size) {
         old_alloc_size = size;
     }
@@ -336,7 +335,7 @@ static void place(char *bp, size_t requested_size)
 
     // if block is larger than the requested block
     // either this or leave the rest to have a chance of being coalesced
-    if (remain > 2*DSIZE) {
+    if (remain > OVERHEAD) {
         char *free_block = bp + requested_size;
 
         // split block and update pointers
@@ -367,19 +366,6 @@ static void place(char *bp, size_t requested_size)
         // footer
         PUT(bp + requested_size - WSIZE, PACK(requested_size, 1));
     } 
-    /*
-    // put at end of list and split block
-    else if(requested_size >= 100 && remain >= 24) {
-        // header
-        PUT(bp + remain, PACK(requested_size, 1));
-        // footer
-        PUT(bp + block_size - WSIZE, PACK(requested_size, 1));
-
-        // free block header
-        PUT(bp, PACK(remain, 0));
-        // free block footer
-        PUT(bp + remain - WSIZE, PACK(remain, 0));
-    } */
     else {
         // remove the block from the free list
         // prev->next = next
@@ -417,6 +403,23 @@ static size_t *find_fit(size_t asize)
 
     return NULL; // no fit
 }
+
+/* Search through list and coalesce when possible */
+static int find_and_coalesce()
+{
+    int did_coalesce = 0;
+    void *bp = PREV_BLKP(epilogue_pointer);
+
+    while (GET_SIZE(bp - WSIZE) != 0) {
+        if(!GET_ALLOC(bp) && !GET_ALLOC(bp - WSIZE)) {
+            coalesce_above(bp);
+            did_coalesce += 1;
+        }
+        bp -= GET_SIZE(bp - WSIZE);
+    }
+    return did_coalesce;
+}
+
 
 /*
  * coalesce - boundary tag coalescing. Return ptr to coalesced block
@@ -465,6 +468,7 @@ void coalesce_above(void *bp)
 
     // next->prev = below_prev
     PUT(NEXT_BLKP(bp) + DSIZE, PREV_BLKP(bp));
+    return bp - above_size;
 }
 
 
