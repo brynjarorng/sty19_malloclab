@@ -102,13 +102,6 @@ static void checkblock(void *bp);
 #define NEXT_BLKP(bp) *((size_t *)(bp + WSIZE))
 #define PREV_BLKP(bp) *((size_t *)(bp + DSIZE))
 
-inline size_t *NEXT_BLKPi(size_t *bp) {
-    return *((size_t *)(bp + WSIZE));
-}
-inline size_t *PREV_BLKPi(size_t *bp) {
-    return *((size_t *)(bp + DSIZE));
-}
-
 // Pointer to first block on heap
 static char *prologue_pointer;
 // pointer to epilogue
@@ -255,6 +248,28 @@ void *mm_realloc(void *ptr, size_t size)
         return ptr;
     }
 
+    // check if block behind is free and large enough for the realloc
+    if (!GET_ALLOC(ptr + old_alloc_size)) {
+        size_t block_behind_size = GET_SIZE(ptr + old_alloc_size);
+        size_t expanded_block_size = old_alloc_size + block_behind_size;
+        if (expanded_block_size >= size + 2*DSIZE) {
+            void *free_block = ptr + old_alloc_size;
+
+            // change header
+            PUT(ptr, PACK(expanded_block_size, 1));
+            // change footer
+            PUT(ptr + expanded_block_size - WSIZE, PACK(expanded_block_size, 1));
+
+            // remove block from list
+            // prev->next = next
+            PUT(PREV_BLKP(free_block) + WSIZE, NEXT_BLKP(free_block));
+            // next->prev = prev
+            PUT(NEXT_BLKP(free_block) + DSIZE, NEXT_BLKP(free_block));
+
+            return ptr;
+        }
+    }
+
     
     // else get a new block, copy old content, free the block then return new pointer
     void *newp;
@@ -317,33 +332,33 @@ static void place(char *bp, size_t requested_size)
 /* $end mmplace-proto */
 {
     size_t block_size = GET_SIZE(bp);
-    size_t free_size = block_size - requested_size;
+    size_t remain = block_size - requested_size;
 
     // if block is larger than the requested block
     // either this or leave the rest to have a chance of being coalesced
-    if (free_size >= 15) {
+    if (remain > 2*DSIZE) {
         char *free_block = bp + requested_size;
 
         // split block and update pointers
         // change pointers pointing to the old block to point to the new block
         // prev->next = new
-        PUT((*(size_t *)(bp + DSIZE)) + WSIZE, free_block);
+        PUT(PREV_BLKP(bp) + WSIZE, free_block);
 
         // next->prev = new
-        PUT((*(size_t *)(bp + WSIZE)) + DSIZE, free_block);
+        PUT(NEXT_BLKP(bp) + DSIZE, free_block);
 
         // shrink the empty block
         // create header
-        PUT(free_block, PACK(free_size, 0));
+        PUT(free_block, PACK(remain, 0));
 
         // create footer
-        PUT(free_block + free_size - WSIZE, PACK(free_size, 0));
+        PUT(free_block + remain - WSIZE, PACK(remain, 0));
 
         // new->prev = bp->prev
-        PUT(free_block + DSIZE, *(size_t *)(bp + DSIZE));
+        PUT(free_block + DSIZE, PREV_BLKP(bp));
 
         // new->next = bp->next
-        PUT(free_block + WSIZE, *(size_t *)(bp + WSIZE));
+        PUT(free_block + WSIZE, NEXT_BLKP(bp));
 
         // fix allocated block
         // header
@@ -351,7 +366,20 @@ static void place(char *bp, size_t requested_size)
 
         // footer
         PUT(bp + requested_size - WSIZE, PACK(requested_size, 1));
-    }
+    } 
+    /*
+    // put at end of list and split block
+    else if(requested_size >= 100 && remain >= 24) {
+        // header
+        PUT(bp + remain, PACK(requested_size, 1));
+        // footer
+        PUT(bp + block_size - WSIZE, PACK(requested_size, 1));
+
+        // free block header
+        PUT(bp, PACK(remain, 0));
+        // free block footer
+        PUT(bp + remain - WSIZE, PACK(remain, 0));
+    } */
     else {
         // remove the block from the free list
         // prev->next = next
@@ -374,7 +402,7 @@ static void place(char *bp, size_t requested_size)
  */
 static size_t *find_fit(size_t asize)
 {
-    void *bp = *(size_t *)(prologue_pointer + WSIZE);
+    void *bp = NEXT_BLKP(prologue_pointer);
 
     while (GET_SIZE(bp) != 0) {
         // check if block is sufficently large
@@ -384,7 +412,7 @@ static size_t *find_fit(size_t asize)
         }
 
         // get next block and check that
-        bp = *(size_t *)(bp + WSIZE);
+        bp = NEXT_BLKP(bp);
     }
 
     return NULL; // no fit
@@ -433,10 +461,10 @@ void coalesce_above(void *bp)
 
     // remove below block from free list
     // prev->next = below_next
-    PUT(PREV_BLKP(bp) + WSIZE, *((size_t *)(bp + WSIZE)));
+    PUT(PREV_BLKP(bp) + WSIZE, NEXT_BLKP(bp));
 
     // next->prev = below_prev
-    PUT(NEXT_BLKP(bp) + DSIZE, *((size_t *)(bp + DSIZE)));
+    PUT(NEXT_BLKP(bp) + DSIZE, PREV_BLKP(bp));
 }
 
 
