@@ -269,7 +269,7 @@ void mm_insert(void *bp)
     }
 }
 
-// Remove block from free list (coalesce)
+// Remove block from free list
 void mm_remove(void *bp)
 {
     // prev->next = next
@@ -281,58 +281,67 @@ void mm_remove(void *bp)
 /*
  * mm_realloc - naive implementation of mm_realloc
  */
-void *mm_realloc(void *ptr, size_t size)
+void *mm_realloc(void *pl_ptr, size_t size)
 {
     mm_checkheap(0, 0);
-    // if ptr is null return new memory
-    if (ptr == NULL) {
+    // If ptr is null, return new memory
+    if (pl_ptr == NULL) {
         return mm_malloc(size);
     }
 
-    // if size == 0 free the block and return NULL
+    // If size == 0, free the block and return NULL
     if (size == 0) {
-        mm_free(ptr);
+        mm_free(pl_ptr);
         return NULL;
     }
 
-    ptr -= HDRSIZE;
-    // return same pointer if large enough
-    size_t old_alloc_size = GET_SIZE(ptr);
+    void *hdr_ptr = pl_ptr - HDRSIZE;     // Move pointer to HDR
+
+    // Return same pointer if large enough
+    size_t old_alloc_size = GET_SIZE(hdr_ptr);
     if (old_alloc_size >= size + OVERHEAD) {
-        return ptr + HDRSIZE;
+        return pl_ptr;
     }
     
-    // check if block behind is free and large enough for the realloc
-    if (!GET_ALLOC(ptr + old_alloc_size)) {
-        size_t block_behind_size = GET_SIZE(ptr + old_alloc_size);
+    // Check if block behind is free and can be used for expanding
+    if (!GET_ALLOC(hdr_ptr + old_alloc_size)) {
+        size_t block_behind_size = GET_SIZE(hdr_ptr + old_alloc_size);
         size_t expanded_block_size = old_alloc_size + block_behind_size;
+        
+        // Check if expanded block (old block + free block below) is large enough for realloc
         if (expanded_block_size >= size + OVERHEAD) {
-            void *free_block = ptr + old_alloc_size;
+            void *free_block = hdr_ptr + old_alloc_size;
 
             // Set HDR and FTR
-            set_hdr_ftr(ptr, expanded_block_size, 1);
+            set_hdr_ftr(hdr_ptr, expanded_block_size, 1);
 
-            // remove block from list
+            // Remove block from list
             mm_remove(free_block);
 
-            return ptr + HDRSIZE;
+            return pl_ptr;
         }
     }
 
     
-    // else get a new block, copy old content, free the block then return new pointer
+    // Else get a new block, copy old content, free the block then return new pointer
     void *newp;
 
+    // Get new block
     if ((newp = mm_malloc(size)) == NULL) {
         printf("ERROR: mm_malloc failed in mm_realloc\n");
         exit(1);
     }
+    
     old_alloc_size -= OVERHEAD;
     if (size < old_alloc_size) {
         old_alloc_size = size;
     }
-    memcpy(newp, ptr + HDRSIZE, old_alloc_size);
-    mm_free(ptr + HDRSIZE);
+    
+    //size += OVERHEAD;
+    memcpy(newp, pl_ptr, size);
+    
+    mm_free(pl_ptr);
+    
     return newp;
 }
 
@@ -412,33 +421,34 @@ static void set_hdr_ftr(char *bp, size_t block_size, int alloc)
  */
 static size_t *find_fit(size_t block_size)
 {
+    // Search list backwards for small blocks
     if (block_size <= SMBLCKSIZE) {
         void *bp = NEXT_BLKP(prologue_pointer);
 
         while (GET_SIZE(bp) != 0) {
-            // check if block is sufficently large
+            // Check if block is sufficently large
             if(GET_SIZE(bp) >= block_size) { 
                 return bp;
             }
 
-            // get next block and check that
+            // Get next block and check that
             bp = NEXT_BLKP(bp);
         }
     }
+    // Search blocks forward for other blocks
     else {
         void *bp = PREV_BLKP(epilogue_pointer);
 
         while (GET_SIZE(bp) != 0) {
-            // check if block is sufficently large
+            // Check if block is sufficently large
             if(GET_SIZE(bp) >= block_size) { 
                 return bp;
             }
 
-            // get next block and check that
+            // Get next block and check that
             bp = PREV_BLKP(bp);
         }
     }
-
     return NULL; // no fit
 }
 
@@ -461,7 +471,8 @@ static void *coalesce(void *bp)
     }
     else if (prev_alloc && !next_alloc) {      // Case 3 - Free below
         coalesce_above(bp + size);
-    } else {
+    } 
+    else {
         size_t tmp_size = GET_SIZE(bp - WSIZE);
         coalesce_above(bp + size);
         coalesce_above(bp);
