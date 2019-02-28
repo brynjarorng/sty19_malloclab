@@ -471,7 +471,8 @@ static void *coalesce(void *bp)
     return bp;
 }
 
-// takes in a 
+// takes in a pointer to a free block that has another free
+// block above it in memory and merges them togeather
 void coalesce_above(void *bp)
 {
     size_t size = GET_SIZE(bp);
@@ -482,11 +483,13 @@ void coalesce_above(void *bp)
 
     // remove below block from free list
     mm_remove(bp);
-
-    return bp - above_size;
 }
 
 
+// memmory validation checker. Checks for loops in the linked list, validates
+// that walking both directions yealds the same list order, possible to walk through
+// each block in physical memory order (slow) and validate every header and footer,
+// validates that all memory addresses are inside the allocated heap
 void mm_checkheap(int verbose, int full_check)
 {
     size_t numFree1 = 0;
@@ -599,6 +602,7 @@ void mm_checkheap(int verbose, int full_check)
     }
 }
 
+// prints a single blocks header and footer
 static void printblock(void *bp) 
 {
     size_t hsize, halloc, fsize, falloc;
@@ -618,6 +622,8 @@ static void printblock(void *bp)
            fsize, (falloc ? 'a' : 'f')); 
 }
 
+// checks if a block is 8 byte aligned, allocated bit is the same in
+// header and footer and the size is the same in the header and footer
 static void checkblock(void *bp) 
 {
     if ((size_t)(bp + HDRSIZE) % 8) {
