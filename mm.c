@@ -331,14 +331,10 @@ void *mm_realloc(void *pl_ptr, size_t size)
         exit(1);
     }
     
-    old_alloc_size -= OVERHEAD;
-    if (size < old_alloc_size) {
-        old_alloc_size = size;
-    }
-    
-    //size += OVERHEAD;
+    // Copy paylod to new block
     memcpy(newp, pl_ptr, size);
     
+    // Free old block
     mm_free(pl_ptr);
     
     return newp;
