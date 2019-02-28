@@ -105,16 +105,16 @@ static char *epil_ptr;
 /*
         The free list is an explicit doubly linked list where only the free blocks are in it. 
         Blocks smaller than SMBLCKSIZE get put at the back of the list while larger blocks are put
-        at the front. The fint_fit function looks for flocks for blocks amaller than SMBLCKSIZE starting at the
+        at the front. The fint_fit function looks for blocks smaller than SMBLCKSIZE starting at the
         end of the list and working it's way from there while other blocks are taken from the front of the list.
 
         This implementation uses a 12 byte header and 4 byte footer for all the blocks on the list. The payload
-        starts 12 bytes in the block. In order to make it alligned the list starts with a single 4 byte block before
-        the prologue block and all allocated blocks are a multiplication of 8 bytes. Then we do not need to think about
-        alignment when placing the blocks.
+        starts 12 bytes in the block. In order to make it aligned the list starts with a single 4 byte block before
+        the prologue block and all blocks and memory expansions are a multiplication of 8 bytes in size.
+        Therefore we do not need to think about alignment when placing the blocks.
 
-        mm_free(size_t ptr) marks an incoming black as free puts blocks smaller than SMBLCKSIZE at the end of the
-        list and other blocks at the start
+        mm_free(size_t ptr) marks an incoming block as free puts blocks smaller than SMBLCKSIZE at the end of the
+        list and other blocks at the start.
 
         our block implementation:
                                       | Address aligned by 8 bytes
@@ -127,8 +127,18 @@ static char *epil_ptr;
 
 /* 
  * mm_init - Initialize the memory manager 
+ * 
+ * Initializes the heap by initializing the prologue block and epilogue block by setting them to
+ * have their allocated bit set and their size set to 0. Then make the next pointer on the prologue block
+ * point to the epilogue block and the prev pointer be null. Make the prev pointer on the epilogue block
+ * point to the prologue block and make the next pointer be null. Then extend the heap to it's init size.
+ * 
+ *                    Header                 |      Footer
+ *        4        +     4      +     4        +      4        = 16 bytes
+ *  size + alloc  -  next ptr  -  prev ptr   |   size + alloc
+ *  prologue and epilogue have the same structure EXCEPT that the epilogue block does not have
+ *  a footer because it does not need it. It will never be accessed using this implementation.
  */
-/* $begin mminit */
 int mm_init(void) 
 {
     /* create the initial empty heap */
@@ -138,11 +148,6 @@ int mm_init(void)
 
     // create a 4 byte padding in order to make the payloads align to 8 bits
     PUT(prol_ptr, 0);
-
-    //                   Header                 |    Footer
-    //      4        +     4      +     4       +      4        = 16 bytes
-    // size + alloc  -  next ptr  -  prev ptr   | size + alloc
-    // prologue and epilogue have the same structure
     
     // setting initial prologue and epilogue pointers
     prol_ptr += 4;
@@ -165,12 +170,16 @@ int mm_init(void)
     }
     return 0;
 }
-/* $end mminit */
 
 /* 
- * mm_malloc - Allocate a block with at least size bytes of payload 
+ * mm_malloc - Allocate a block with at least size bytes of payload
+ * 
+ * Ignores invalid blocks iszes by returning NULL. Finds a block that is big enough to fit the request and is 8 byte aligned.
+ * Either align the requested block size to be a multiple of 8 by only making it larger or use the MINBLOCKSIZE. Pick the larger of
+ * the two choices. Search for a suitibly large free block and put the block in that space. The precise functionality of the functions
+ * place() and find_fit() is described below in the respective function headers.
+ * 
  */
-/* $begin mmmalloc */
 void *mm_malloc(size_t pl_size) 
 {
     size_t block_size;      /* adjusted block size */
@@ -198,16 +207,17 @@ void *mm_malloc(size_t pl_size)
     place(hdr_ptr, block_size);
     
     return hdr_ptr + HDRSIZE;
-} 
-/* $end mmmalloc */
+}
 
 /* 
  * mm_free - Free a block 
+ * 
+ * Set the block header and footer to unallocated and insert the block into the free list. Then coalesce if possible.
  */
-/* $begin mmfree */
 void mm_free(void *bp)
 {
-    bp -= HDRSIZE;                      // Move ptr to HDR
+    // Move ptr from the payload to the beginning of the block
+    bp -= HDRSIZE;
     size_t block_size = GET_SIZE(bp);
 
     // fix header and footer
@@ -219,53 +229,15 @@ void mm_free(void *bp)
     coalesce(bp);
 }
 
-/* $end mmfree */
-
-// Insert block into free list
-void mm_insert(void *hdr_ptr)
-{
-    // Small block are added to the back of the list
-    if(GET_SIZE(hdr_ptr) <= SMBLCKSIZE) {
-        // Fix free block pointers
-        // new->next = epilogue
-        PUT(hdr_ptr + WSIZE, epil_ptr);
-        // new->prev = epilogue->prev
-        PUT(hdr_ptr + DSIZE, PREV_BLKP(epil_ptr));
-
-        // Connect free block to back of free list
-        // epilogue->prev->next = newblock
-        PUT(PREV_BLKP(epil_ptr) + WSIZE, hdr_ptr);
-        // epilogue->prev = newblock
-        PUT(epil_ptr + DSIZE, hdr_ptr);
-    }
-
-    // Other blocks are added to the front of the list
-    else {
-        // Fix new block pointers
-        // new->prev = prologue
-        PUT(hdr_ptr + DSIZE, prol_ptr);
-        // new->next = prologue->prev
-        PUT(hdr_ptr + WSIZE, NEXT_BLKP(prol_ptr));
-
-        // Connect free block to front of free list
-        // prologue->next->prev = newblock
-        PUT(NEXT_BLKP(prol_ptr) + DSIZE, hdr_ptr);
-        // prologue->next = newblock
-        PUT(prol_ptr + WSIZE, hdr_ptr);
-    }
-}
-
-// Remove block from free list
-void mm_remove(void *hdr_ptr)
-{
-    // prev->next = next
-    PUT(PREV_BLKP(hdr_ptr) + WSIZE, NEXT_BLKP(hdr_ptr));
-    // next->prev = prev
-    PUT(NEXT_BLKP(hdr_ptr) + DSIZE, PREV_BLKP(hdr_ptr));
-}
-
 /*
  * mm_realloc - naive implementation of mm_realloc
+ * 
+ * Returns a new block if pointer is a Null pointer, Returns NULL nd frees a pointer if new size is 0. Returns
+ * the same pointer if current block can accumulate the new requested block size. If requested size is larger than
+ * the current block, check if the block directly behind in memory is free and large enough to accomidate the new requested block size.
+ * If so change the headder of the current block to be of the size of the current block plus next block and fix the footer of that
+ * block to match the header and return the same pointer. Else if nothing aforementioned is applicable, call mm_malloc 
+ * to get a new appropriately sized block, copy all information from the old block to the new block, free the old block and return the new block.
  */
 void *mm_realloc(void *pl_ptr, size_t size)
 {
@@ -281,7 +253,8 @@ void *mm_realloc(void *pl_ptr, size_t size)
         return NULL;
     }
 
-    void *hdr_ptr = pl_ptr - HDRSIZE;     // Move pointer to HDR
+    // Move pointer to HDR
+    void *hdr_ptr = pl_ptr - HDRSIZE;
 
     // Return same pointer if large enough
     size_t old_alloc_size = GET_SIZE(hdr_ptr);
@@ -289,7 +262,7 @@ void *mm_realloc(void *pl_ptr, size_t size)
         return pl_ptr;
     }
     
-    // Check if block behind is free and can be used for expanding
+    // Check if block behind is free and can be used for expanding the current block
     if (!GET_ALLOC(hdr_ptr + old_alloc_size)) {
         size_t block_behind_size = GET_SIZE(hdr_ptr + old_alloc_size);
         size_t expanded_block_size = old_alloc_size + block_behind_size;
@@ -328,8 +301,73 @@ void *mm_realloc(void *pl_ptr, size_t size)
 
 /* The remaining routines are internal helper routines */
 
+
+/* 
+ * mm_insert - Insert block into free list
+ * 
+ * If a block is smaller than SMBLCKSIZE it is put at the end of the free lest just in front of the prologue block.
+ * Else it is put at the front of the list. The prev pointer in the epilogue block points to the new block, the next pointer 
+ * in the old block that was behind the epilogue block also points to the new block. The new blocks next points to the epilogue block
+ * and the previous pointer points to the old block. The same applies to inserting at the front of the list except the next pointer
+ * is changed in th prologue pointer and the prev pointer is changed in the old first usable block.
+ */
+void mm_insert(void *hdr_ptr)
+{
+    // Small block are added to the back of the list
+    if(GET_SIZE(hdr_ptr) <= SMBLCKSIZE) {
+        // Fix free block pointers
+        // new->next = epilogue
+        PUT(hdr_ptr + WSIZE, epil_ptr);
+        // new->prev = epilogue->prev
+        PUT(hdr_ptr + DSIZE, PREV_BLKP(epil_ptr));
+
+        // Connect free block to back of free list
+        // epilogue->prev->next = newblock
+        PUT(PREV_BLKP(epil_ptr) + WSIZE, hdr_ptr);
+        // epilogue->prev = newblock
+        PUT(epil_ptr + DSIZE, hdr_ptr);
+    }
+
+    // Other blocks are added to the front of the list
+    else {
+        // Fix new block pointers
+        // new->prev = prologue
+        PUT(hdr_ptr + DSIZE, prol_ptr);
+        // new->next = prologue->prev
+        PUT(hdr_ptr + WSIZE, NEXT_BLKP(prol_ptr));
+
+        // Connect free block to front of free list
+        // prologue->next->prev = newblock
+        PUT(NEXT_BLKP(prol_ptr) + DSIZE, hdr_ptr);
+        // prologue->next = newblock
+        PUT(prol_ptr + WSIZE, hdr_ptr);
+    }
+}
+
+/* 
+ * mm_remove - Remove block from free list
+ * 
+ * Short function that removes a single block from the free list. It changes the pointers of the block behind
+ * to point to the next block and the block in front to point to the block behind. Effectively pulling the block out of the list.
+ */
+void mm_remove(void *hdr_ptr)
+{
+    // prev->next = next
+    PUT(PREV_BLKP(hdr_ptr) + WSIZE, NEXT_BLKP(hdr_ptr));
+    // next->prev = prev
+    PUT(NEXT_BLKP(hdr_ptr) + DSIZE, PREV_BLKP(hdr_ptr));
+}
+
 /* 
  * extend_heap - Extend heap with free block and return its block pointer
+ * 
+ * Extend heap asks mem_sbrk to allocate more memory to the checker. All request are a multiplication of 8
+ * in order to make it easy to maintain 8 byte alignment.
+ * 
+ * First the old epilogue header is overwritten and a new footer is placed "size" bytes down and
+ * the block is marked as free. Just below that a new epilogue block is created and added to the
+ * end of the free list. There is no need to change any pointers, only to add a new next pointer to the 
+ * new free block and a prev pointer to the epilogue block. End by trying to coalesce.
  */
 static void *extend_heap(size_t size) 
 {
@@ -344,7 +382,7 @@ static void *extend_heap(size_t size)
     epil_ptr += size;
     
     // init new block
-    set_hdr_ftr(bp, size, 0);                          // Set HDR and FTR
+    set_hdr_ftr(bp, size, 0);                  // Set HDR and FTR
     PUT(bp + WSIZE, epil_ptr);                 // next pointer
     // prev pointer does not need to be changed, it still points to a valid block
 
@@ -360,8 +398,12 @@ static void *extend_heap(size_t size)
 /* 
  * place - Place block of asize bytes at start of free block bp 
  *         and split if remainder would be at least minimum block size
+ * 
+ * If a block that is going to be placed leaves less than MINBLOCKSIZE bytes of memory
+ * it takes all of the remaining memory and removes the block from the freelist. Else it needs
+ * to split the block into an allocated block and free block. The allocated block gets new a header
+ * and footer while the new free block also gets added to the free list.
  */
-/* $begin mmplace */
 static void place(char *bp, size_t requested_size)
 {
     size_t block_size = GET_SIZE(bp);
@@ -389,8 +431,10 @@ static void place(char *bp, size_t requested_size)
         set_hdr_ftr(bp, block_size, 1);
     }
 }
-/* $end mmplace */
 
+/*
+ * set_hdr_ftr - set the allocation bit and size of a block header and footer
+ */
 static void set_hdr_ftr(char *hdr_ptr, size_t block_size, int alloc)
 {
     // set header and footer
@@ -400,6 +444,10 @@ static void set_hdr_ftr(char *hdr_ptr, size_t block_size, int alloc)
 
 /* 
  * find_fit - Find a fit for the size of the block
+ * 
+ * If a block is smaller than SMBLCKSIZE, start at the end of the free list and search in reverse order.
+ * Else start at the start of the free list. If a large enough block is found, return a pointer to it
+ * else return NULL 
  */
 static size_t *find_fit(size_t block_size)
 {
@@ -431,11 +479,21 @@ static size_t *find_fit(size_t block_size)
             hdr_ptr = PREV_BLKP(hdr_ptr);
         }
     }
-    return NULL; // no fit
+    // no fit
+    return NULL;
 }
 
 /*
  * coalesce - boundary tag coalescing. Return ptr to coalesced block
+ * 
+ * Check four cases that can come up:
+ * 1. If both block above and below are not free, return and do nothing
+ * 2. If block above is free, get the size of that block, coalesce it with the current block and return a pointer
+ *    to the block above
+ * 3. If block below is free, call coalesce_above with the pointer of the block 
+ *    below and return the pointer to the block above
+ * 4. If both block above and below are free, get the size of the block above, then coalesce the block below lastly
+ *    coalesce the block above and return a pointer to the top most block
  */
 static void *coalesce(void *hdr_ptr) 
 {
@@ -443,19 +501,19 @@ static void *coalesce(void *hdr_ptr)
     size_t prev_alloc = GET_ALLOC(hdr_ptr - WSIZE);
     size_t next_alloc = GET_ALLOC(hdr_ptr + size);
 
-    if (prev_alloc && next_alloc) {            // Case 1 - Nothing
+    if (prev_alloc && next_alloc) {                         // Case 1 - Nothing
         return hdr_ptr;
     }
-    else if (!prev_alloc && next_alloc) {      // Case 2 - Free above
+    else if (!prev_alloc && next_alloc) {                   // Case 2 - Free above
         size_t tmp_size = GET_SIZE(hdr_ptr - WSIZE);
         coalesce_above(hdr_ptr);
         hdr_ptr -= tmp_size;
     }
-    else if (prev_alloc && !next_alloc) {      // Case 3 - Free below
+    else if (prev_alloc && !next_alloc) {                   // Case 3 - Free below
         coalesce_above(hdr_ptr + size);
     } 
     else {
-        size_t tmp_size = GET_SIZE(hdr_ptr - WSIZE);
+        size_t tmp_size = GET_SIZE(hdr_ptr - WSIZE);        // Case 4 - Free above and below
         coalesce_above(hdr_ptr + size);
         coalesce_above(hdr_ptr);
         hdr_ptr -= tmp_size;
@@ -464,8 +522,14 @@ static void *coalesce(void *hdr_ptr)
     return hdr_ptr;
 }
 
-// takes in a pointer to a free block that has another free
-// block above it in memory and merges them togeather
+/*
+ * coalesce_above - coalesce current block with block above
+ *
+ * takes in a pointer to a free block that has another free block above it in memory and merges them togeather
+ * by changing the size of the footer of this block and the header of the block above the size of the
+ * current block plus the block above. Then it calls mm_remove to remove the current block (lower block of the two)
+ * from the free list
+ */
 void coalesce_above(void *hdr_ptr)
 {
     size_t size = GET_SIZE(hdr_ptr);
@@ -478,10 +542,14 @@ void coalesce_above(void *hdr_ptr)
     mm_remove(hdr_ptr);
 }
 
-// memmory validation checker. Checks for loops in the linked list, validates
-// that walking both directions yealds the same list order, possible to walk through
-// each block in physical memory order (slow) and validate every header and footer,
-// validates that all memory addresses are inside the allocated heap
+/*
+ * mm_checkheap - Heap checker
+ *
+ * memmory validation checker. Checks for loops in the linked list, validates
+ * that walking both directions yealds the same list order, possible to walk through
+ * each block in physical memory order (slow) and validate every header and footer,
+ * validates that all memory addresses are inside the allocated heap
+ */
 void mm_checkheap(int verbose, int full_check)
 {
     size_t numFree1 = 0;
@@ -524,7 +592,6 @@ void mm_checkheap(int verbose, int full_check)
             }
         }
     }
-    
 
     if ((GET_SIZE(epil_ptr) != 0) || !(GET_ALLOC(epil_ptr))) {
         printf("Bad epilogue header\n");
@@ -595,6 +662,7 @@ void mm_checkheap(int verbose, int full_check)
 }
 
 // prints a single blocks header and footer
+// from the function mm-firstfit.c - MODIFIED
 static void printblock(void *bp) 
 {
     size_t hsize, halloc, fsize, falloc;
@@ -616,6 +684,7 @@ static void printblock(void *bp)
 
 // checks if a block is 8 byte aligned, allocated bit is the same in
 // header and footer and the size is the same in the header and footer
+// from the function mm-firstfit.c - MODIFIED
 static void checkblock(void *bp) 
 {
     if ((size_t)(bp + HDRSIZE) % 8) {
