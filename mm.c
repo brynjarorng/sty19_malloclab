@@ -28,11 +28,11 @@
  *       Format!
  *
  * === User information ===
- * Group: 
- * User 1: 
- * SSN: X
- * User 2: 
- * SSN: X
+ * Group: Nuclear Ghandi
+ * User 1: brynjarog17
+ * SSN: 270498-3029
+ * User 2: dadib17
+ * SSN: 140990-2729
  * User 3: 
  * SSN: X
  * === End User Information ===
