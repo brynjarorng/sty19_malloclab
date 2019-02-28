@@ -81,8 +81,6 @@ static void checkblock(void *bp);
 
 #define MAX(x, y) ((x) > (y)? (x) : (y))
 
-#define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
-
 // all macros from the book
 // pack size and allocated bit into one word
 #define PACK(size, alloc)  ((size) | (alloc))
@@ -95,11 +93,6 @@ static void checkblock(void *bp);
 #define GET_SIZE(p)     (GET(p) & ~0x7)
 #define GET_ALLOC(p)    (GET(p) & 0x1)
 
-// compute addr of next and prev block
-//#define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(((char *)(bp) - WSIZE)))
-#define NEXT_BLKP(bp) *((size_t *)(bp + WSIZE))
-#define PREV_BLKP(bp) *((size_t *)(bp + DSIZE))
-
 // Pointer manipulation
 #define PREV_BLKP(bp)   *((size_t *)(bp + DSIZE))     //prev pointer on free list
 #define NEXT_BLKP(bp)   *((size_t *)(bp + WSIZE))     //next pointer on free list
@@ -110,7 +103,6 @@ static void checkblock(void *bp);
 // Pointers to prologue and epilogue
 static char *prol_ptr;
 static char *epil_ptr;
-
 
 /*
         The free list is an explicit doubly linked list where only the free blocks are in it. 
@@ -203,7 +195,6 @@ void *mm_malloc(size_t pl_size)
     }
 
     /* No fit found. Get more memory and place the block */
-    
     size_t extend_size = MAX(block_size, CHUNKSIZE);     /* amount to extend heap if no fit */
     if ((hdr_ptr = extend_heap(extend_size)) == NULL) {
         return NULL;
@@ -320,7 +311,6 @@ void *mm_realloc(void *pl_ptr, size_t size)
             return pl_ptr;
         }
     }
-
     
     // Else get a new block, copy old content, free the block then return new pointer
     void *newp;
