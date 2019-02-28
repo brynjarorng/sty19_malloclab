@@ -69,16 +69,14 @@ static void checkblock(void *bp);
 #define ALIGNMENT 8
 #define WSIZE 4
 #define DSIZE 8
-#define HDRSIZE 12          //size of HDR
-#define OVERHEAD 16
-#define MINBLOCKSIZE 32
-#define SMBLCKSIZE (1<<10)
-#define CHUNKSIZE (1<<12)
-// min payload space (8) + head + nxt + prv + tail = 32
+#define HDRSIZE 12              // size of HDR
+#define OVERHEAD 16             // size of HDR(12) + FTR(4)
+#define MINBLOCKSIZE 32         // Min block to allocate
+#define SMBLCKSIZE (1<<10)      // Used to add to and search the free list
+#define CHUNKSIZE (1<<12)       // Used for heap extension
 
 /* rounds up to the nearest multiple of ALIGNMENT */
 #define ALIGN(size) (((size_t)(size) + (ALIGNMENT-1)) & ~0x7)
-
 #define MAX(x, y) ((x) > (y)? (x) : (y))
 
 // all macros from the book
@@ -126,8 +124,6 @@ static char *epil_ptr;
         | size    |         |         | N%8 = 0 | size   |
         --------------------------------------------------
 */
-
-
 
 /* 
  * mm_init - Initialize the memory manager 
