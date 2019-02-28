@@ -108,8 +108,8 @@ static void checkblock(void *bp);
 #define FTRP(bp)         (BELOW_BLKP(bp) - WSIZE)
 
 // Pointers to prologue and epilogue
-static char *prologue_pointer;
-static char *epilogue_pointer;
+static char *prol_ptr;
+static char *epil_ptr;
 
 
 /*
@@ -144,12 +144,12 @@ static char *epilogue_pointer;
 int mm_init(void) 
 {
     /* create the initial empty heap */
-    if ((prologue_pointer = mem_sbrk(8*WSIZE)) == NULL) {
+    if ((prol_ptr = mem_sbrk(8*WSIZE)) == NULL) {
         return -1;
     }
 
     // create a 4 byte padding in order to make the payloads align to 8 bits
-    PUT(prologue_pointer, 0);
+    PUT(prol_ptr, 0);
 
     //                   Header                 |    Footer
     //      4        +     4      +     4       +      4        = 16 bytes
@@ -157,19 +157,19 @@ int mm_init(void)
     // prologue and epilogue have the same structure
     
     // setting initial prologue and epilogue pointers
-    prologue_pointer += 4;
-    epilogue_pointer = prologue_pointer + OVERHEAD;
+    prol_ptr += 4;
+    epil_ptr = prol_ptr + OVERHEAD;
 
     // Prologue
-    PUT(prologue_pointer, PACK(0, 1));                  // Prologue HDR size and alloc bit
-    PUT(prologue_pointer+WSIZE, epilogue_pointer);      // Prologue next pointer
-    PUT(prologue_pointer+DSIZE, 0);                     // prev pointer, always null on the head node
-    PUT(prologue_pointer+HDRSIZE, PACK(0, 1));      // prologue footer
+    PUT(prol_ptr, PACK(0, 1));                  // Prologue HDR size and alloc bit
+    PUT(prol_ptr+WSIZE, epil_ptr);              // Prologue next pointer
+    PUT(prol_ptr+DSIZE, 0);                     // prev pointer, always null on the head node
+    PUT(prol_ptr+HDRSIZE, PACK(0, 1));          // prologue footer
 
     // Epilogue
-    PUT(epilogue_pointer, PACK(0, 1));                    // Epilogue HDR size and alloc bit
-    PUT(epilogue_pointer+WSIZE, 0);                       // Epilogue next ptr, always null
-    PUT(epilogue_pointer+DSIZE, prologue_pointer);                    // Epilogue prev ptr
+    PUT(epil_ptr, PACK(0, 1));                    // Epilogue HDR size and alloc bit
+    PUT(epil_ptr+WSIZE, 0);                       // Epilogue next ptr, always null
+    PUT(epil_ptr+DSIZE, prol_ptr);                // Epilogue prev ptr
 
     /* Extend the empty heap with a free block of CHUNKSIZE bytes */
     if (extend_heap(CHUNKSIZE) == NULL) {
@@ -186,7 +186,7 @@ int mm_init(void)
 void *mm_malloc(size_t pl_size) 
 {
     size_t block_size;      /* adjusted block size */
-    char *bp;      
+    char *hdr_ptr;
 
     /* Ignore spurious requests */
     if (pl_size <= 0) {
@@ -197,20 +197,20 @@ void *mm_malloc(size_t pl_size)
     block_size = MAX(ALIGN(pl_size + OVERHEAD), MINBLOCKSIZE);
     
     /* Search the free list for a fit */
-    if ((bp = find_fit(block_size)) != NULL) {
-        place(bp, block_size);
-        return bp + HDRSIZE;
+    if ((hdr_ptr = find_fit(block_size)) != NULL) {
+        place(hdr_ptr, block_size);
+        return hdr_ptr + HDRSIZE;
     }
 
     /* No fit found. Get more memory and place the block */
     
-    size_t extend_size = ALIGN(MAX(block_size, CHUNKSIZE));     /* amount to extend heap if no fit */
-    if ((bp = extend_heap(extend_size)) == NULL) {
+    size_t extend_size = MAX(block_size, CHUNKSIZE);     /* amount to extend heap if no fit */
+    if ((hdr_ptr = extend_heap(extend_size)) == NULL) {
         return NULL;
     }
-    place(bp, block_size);
+    place(hdr_ptr, block_size);
     
-    return bp + HDRSIZE;
+    return hdr_ptr + HDRSIZE;
 } 
 /* $end mmmalloc */
 
@@ -220,7 +220,7 @@ void *mm_malloc(size_t pl_size)
 /* $begin mmfree */
 void mm_free(void *bp)
 {
-    bp -= HDRSIZE;
+    bp -= HDRSIZE;                      // Move ptr to HDR
     size_t block_size = GET_SIZE(bp);
 
     // fix header and footer
@@ -235,47 +235,46 @@ void mm_free(void *bp)
 /* $end mmfree */
 
 // Insert block into free list
-void mm_insert(void *bp)
+void mm_insert(void *hdr_ptr)
 {
-
     // Small block are added to the back of the list
-    if(GET_SIZE(bp) <= SMBLCKSIZE) {
+    if(GET_SIZE(hdr_ptr) <= SMBLCKSIZE) {
         // Fix free block pointers
         // new->next = epilogue
-        PUT(bp + WSIZE, epilogue_pointer);
+        PUT(hdr_ptr + WSIZE, epil_ptr);
         // new->prev = epilogue->prev
-        PUT(bp + DSIZE, PREV_BLKP(epilogue_pointer));
+        PUT(hdr_ptr + DSIZE, PREV_BLKP(epil_ptr));
 
         // Connect free block to back of free list
         // epilogue->prev->next = newblock
-        PUT(PREV_BLKP(epilogue_pointer) + WSIZE, bp);
+        PUT(PREV_BLKP(epil_ptr) + WSIZE, hdr_ptr);
         // epilogue->prev = newblock
-        PUT(epilogue_pointer + DSIZE, bp);
+        PUT(epil_ptr + DSIZE, hdr_ptr);
     }
 
     // Other blocks are added to the front of the list
     else {
         // Fix new block pointers
         // new->prev = prologue
-        PUT(bp + DSIZE, prologue_pointer);
+        PUT(hdr_ptr + DSIZE, prol_ptr);
         // new->next = prologue->prev
-        PUT(bp + WSIZE, NEXT_BLKP(prologue_pointer));
+        PUT(hdr_ptr + WSIZE, NEXT_BLKP(prol_ptr));
 
         // Connect free block to front of free list
         // prologue->next->prev = newblock
-        PUT(NEXT_BLKP(prologue_pointer) + DSIZE, bp);
+        PUT(NEXT_BLKP(prol_ptr) + DSIZE, hdr_ptr);
         // prologue->next = newblock
-        PUT(prologue_pointer + WSIZE, bp);
+        PUT(prol_ptr + WSIZE, hdr_ptr);
     }
 }
 
 // Remove block from free list
-void mm_remove(void *bp)
+void mm_remove(void *hdr_ptr)
 {
     // prev->next = next
-    PUT(PREV_BLKP(bp) + WSIZE, NEXT_BLKP(bp));
+    PUT(PREV_BLKP(hdr_ptr) + WSIZE, NEXT_BLKP(hdr_ptr));
     // next->prev = prev
-    PUT(NEXT_BLKP(bp) + DSIZE, PREV_BLKP(bp));
+    PUT(NEXT_BLKP(hdr_ptr) + DSIZE, PREV_BLKP(hdr_ptr));
 }
 
 /*
@@ -357,19 +356,20 @@ static void *extend_heap(size_t size)
     if ((bp = mem_sbrk(size)) == (void *)-1) {
         return NULL;
     }
-    bp = epilogue_pointer;
+    
+    bp = epil_ptr;
     // move epilogue pointer to new epilogue block
-    epilogue_pointer += size;
-
+    epil_ptr += size;
+    
     // init new block
     set_hdr_ftr(bp, size, 0);                          // Set HDR and FTR
-    PUT(bp + WSIZE, epilogue_pointer);                 // next pointer
+    PUT(bp + WSIZE, epil_ptr);                 // next pointer
     // prev pointer does not need to be changed, it still points to a valid block
 
     // write new epilogue block
-    PUT(epilogue_pointer, PACK(0, 1));                  // put header
-    PUT(epilogue_pointer + WSIZE, 0);                   // next pointer
-    PUT(epilogue_pointer + DSIZE, bp);                  // prev pointer
+    PUT(epil_ptr, PACK(0, 1));                  // put header
+    PUT(epil_ptr + WSIZE, 0);                   // next pointer
+    PUT(epil_ptr + DSIZE, bp);                  // prev pointer
 
     /* Coalesce if the previous block was free */
     return coalesce(bp);
@@ -391,16 +391,16 @@ static void place(char *bp, size_t requested_size)
     // if block is larger than the requested block
     // either this or leave the rest to have a chance of being coalesced
     if (remaining_size > MINBLOCKSIZE) {
-        char *free_block = bp + requested_size;
+        char *free_ptr = bp + requested_size;
 
         // Set HDR and FTR for allocated block
         set_hdr_ftr(bp, requested_size, 1);
 
         // Set HDR and FTR for free block
-        set_hdr_ftr(free_block, remaining_size, 0);
+        set_hdr_ftr(free_ptr, remaining_size, 0);
 
         // Insert free block to free list
-        mm_insert(free_block);        
+        mm_insert(free_ptr);        
     } 
     else {
         // Update HDR and FTR
@@ -409,11 +409,11 @@ static void place(char *bp, size_t requested_size)
 }
 /* $end mmplace */
 
-static void set_hdr_ftr(char *bp, size_t block_size, int alloc)
+static void set_hdr_ftr(char *hdr_ptr, size_t block_size, int alloc)
 {
     // set header and footer
-    PUT(bp, PACK(block_size, alloc));
-    PUT(FTRP(bp), PACK(block_size, alloc));
+    PUT(hdr_ptr, PACK(block_size, alloc));
+    PUT(FTRP(hdr_ptr), PACK(block_size, alloc));
 }
 
 /* 
@@ -423,30 +423,30 @@ static size_t *find_fit(size_t block_size)
 {
     // Search list backwards for small blocks
     if (block_size <= SMBLCKSIZE) {
-        void *bp = NEXT_BLKP(prologue_pointer);
+        void *hdr_ptr = NEXT_BLKP(prol_ptr);
 
-        while (GET_SIZE(bp) != 0) {
+        while (GET_SIZE(hdr_ptr) != 0) {
             // Check if block is sufficently large
-            if(GET_SIZE(bp) >= block_size) { 
-                return bp;
+            if(GET_SIZE(hdr_ptr) >= block_size) { 
+                return hdr_ptr;
             }
 
             // Get next block and check that
-            bp = NEXT_BLKP(bp);
+            hdr_ptr = NEXT_BLKP(hdr_ptr);
         }
     }
     // Search blocks forward for other blocks
     else {
-        void *bp = PREV_BLKP(epilogue_pointer);
+        void *hdr_ptr = PREV_BLKP(epil_ptr);
 
-        while (GET_SIZE(bp) != 0) {
+        while (GET_SIZE(hdr_ptr) != 0) {
             // Check if block is sufficently large
-            if(GET_SIZE(bp) >= block_size) { 
-                return bp;
+            if(GET_SIZE(hdr_ptr) >= block_size) { 
+                return hdr_ptr;
             }
 
             // Get next block and check that
-            bp = PREV_BLKP(bp);
+            hdr_ptr = PREV_BLKP(hdr_ptr);
         }
     }
     return NULL; // no fit
@@ -455,47 +455,46 @@ static size_t *find_fit(size_t block_size)
 /*
  * coalesce - boundary tag coalescing. Return ptr to coalesced block
  */
-static void *coalesce(void *bp) 
+static void *coalesce(void *hdr_ptr) 
 {
-    size_t prev_alloc = GET_ALLOC(bp - WSIZE);
-    size_t size = GET_SIZE(bp);
-    size_t next_alloc = GET_ALLOC(bp + size);
+    size_t size = GET_SIZE(hdr_ptr);
+    size_t prev_alloc = GET_ALLOC(hdr_ptr - WSIZE);
+    size_t next_alloc = GET_ALLOC(hdr_ptr + size);
 
     if (prev_alloc && next_alloc) {            // Case 1 - Nothing
-        return bp;
+        return hdr_ptr;
     }
     else if (!prev_alloc && next_alloc) {      // Case 2 - Free above
-        size_t tmp_size = GET_SIZE(bp - WSIZE);
-        coalesce_above(bp);
-        bp -= tmp_size;
+        size_t tmp_size = GET_SIZE(hdr_ptr - WSIZE);
+        coalesce_above(hdr_ptr);
+        hdr_ptr -= tmp_size;
     }
     else if (prev_alloc && !next_alloc) {      // Case 3 - Free below
-        coalesce_above(bp + size);
+        coalesce_above(hdr_ptr + size);
     } 
     else {
-        size_t tmp_size = GET_SIZE(bp - WSIZE);
-        coalesce_above(bp + size);
-        coalesce_above(bp);
-        bp -= tmp_size;
+        size_t tmp_size = GET_SIZE(hdr_ptr - WSIZE);
+        coalesce_above(hdr_ptr + size);
+        coalesce_above(hdr_ptr);
+        hdr_ptr -= tmp_size;
     }
     
-    return bp;
+    return hdr_ptr;
 }
 
 // takes in a pointer to a free block that has another free
 // block above it in memory and merges them togeather
-void coalesce_above(void *bp)
+void coalesce_above(void *hdr_ptr)
 {
-    size_t size = GET_SIZE(bp);
-    size_t above_size = GET_SIZE(bp - WSIZE);
+    size_t size = GET_SIZE(hdr_ptr);
+    size_t above_size = GET_SIZE(hdr_ptr - WSIZE);
 
     // fix header and footer
-    set_hdr_ftr(bp - above_size, size + above_size, 0);
+    set_hdr_ftr(hdr_ptr - above_size, size + above_size, 0);
 
     // remove below block from free list
-    mm_remove(bp);
+    mm_remove(hdr_ptr);
 }
-
 
 // memmory validation checker. Checks for loops in the linked list, validates
 // that walking both directions yealds the same list order, possible to walk through
@@ -505,16 +504,16 @@ void mm_checkheap(int verbose, int full_check)
 {
     size_t numFree1 = 0;
     size_t numFree2 = 0;
-    void *bp = prologue_pointer;
+    void *bp = prol_ptr;
     size_t memAddr[100000];
     size_t memAddrCounter = 0;
 
     if (verbose) {
-        printf("Heap (%p):\n", prologue_pointer);
+        printf("Heap (%p):\n", prol_ptr);
     }
 
     // check prologue and epilogue blocks 
-    if ((GET_SIZE(prologue_pointer) != 0) || !GET_ALLOC(prologue_pointer)) {
+    if ((GET_SIZE(prol_ptr) != 0) || !GET_ALLOC(prol_ptr)) {
         printf("Bad prologue header\n");
     }
     
@@ -538,14 +537,14 @@ void mm_checkheap(int verbose, int full_check)
             }
 
             // check if memory address is valid
-            if (bp < prologue_pointer || bp > epilogue_pointer) {
+            if (bp < prol_ptr || bp > epil_ptr) {
                 printf("%p Memory address lies outside of heap!\n");
             }
         }
     }
     
 
-    if ((GET_SIZE(epilogue_pointer) != 0) || !(GET_ALLOC(epilogue_pointer))) {
+    if ((GET_SIZE(epil_ptr) != 0) || !(GET_ALLOC(epil_ptr))) {
         printf("Bad epilogue header\n");
     }
 
@@ -556,9 +555,9 @@ void mm_checkheap(int verbose, int full_check)
     
     // check number of free blocks in the explicit list
     // walk list forward
-    for(bp = NEXT_BLKP(prologue_pointer); GET_SIZE(bp) > 0 && bp != NULL; bp = NEXT_BLKP(bp)) {
+    for(bp = NEXT_BLKP(prol_ptr); GET_SIZE(bp) > 0 && bp != NULL; bp = NEXT_BLKP(bp)) {
         // check if memory address is valid
-        if (bp < prologue_pointer || bp > epilogue_pointer) {
+        if (bp < prol_ptr || bp > epil_ptr) {
             printf("%p Memory address lies outside of heap!\n");
         }
         
@@ -593,7 +592,7 @@ void mm_checkheap(int verbose, int full_check)
     // walk list backward
     for(bp = PREV_BLKP(bp); GET_SIZE(bp) > 0 && bp != NULL; bp = PREV_BLKP(bp)) {
         // check if memory address is valid
-        if (bp < prologue_pointer || bp > epilogue_pointer) {
+        if (bp < prol_ptr || bp > epil_ptr) {
             printf("%p Memory address lies outside of heap!\n");
         }
         
